@@ -90,11 +90,12 @@ export async function fetchAccessToken(key: ServiceAccountKey, fetchImpl: FetchL
   return body.access_token;
 }
 
-export function buildServiceBody(image: string, containerPort: number, maxInstances: number) {
+export function buildServiceBody(image: string, containerPort: number, maxInstances: number, env: Record<string, string> = {}) {
+  const variables = Object.entries(env).map(([name, value]) => ({ name, value }));
   return {
     ingress: "INGRESS_TRAFFIC_ALL",
     template: {
-      containers: [{ image, ports: [{ containerPort }] }],
+      containers: [{ image, ports: [{ containerPort }], ...(variables.length ? { env: variables } : {}) }],
       scaling: { minInstanceCount: 0, maxInstanceCount: maxInstances },
     },
   };
@@ -207,7 +208,7 @@ export function createCloudRunDeployer(
       const image = ref.registry === DOCKER_HUB ? toArtifactRegistryProxy(ref, config.proxy) : formatImageRef(ref);
       const token = await fetchAccessToken(key, fetchImpl);
       const serviceUrl = `${RUN_API}/${parent}/services`;
-      const body = buildServiceBody(image, request.containerPort, config.maxInstances ?? 2);
+      const body = buildServiceBody(image, request.containerPort, config.maxInstances ?? 2, request.env);
 
       const existing = await call<CloudRunService>(token, "GET", `${serviceUrl}/${request.serviceName}`, undefined, true);
       const previousRevision = servingRevision(existing);
