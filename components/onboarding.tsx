@@ -30,7 +30,9 @@ export function Onboarding() {
   const [analysis, setAnalysis] = useState<RepositoryAnalysis | null>(null);
   const [setup, setSetup] = useState<GeneratedSetup | null>(null);
   const [dockerfile, setDockerfile] = useState("");
-  const [pullRequest, setPullRequest] = useState<{ number: number; htmlUrl: string; branch: string } | null>(null);
+  const [pullRequest, setPullRequest] = useState<{ number: number; htmlUrl: string; branch: string; merged?: boolean } | null>(null);
+  const [pipelineStep, setPipelineStep] = useState<"idle" | "analyzing" | "generating" | "merging" | "completed">("idle");
+  const [showAdvancedSetup, setShowAdvancedSetup] = useState(false);
   const [showCiSetup, setShowCiSetup] = useState(false);
   const [selectedInfra, setSelectedInfra] = useState<"on-premise" | "cloud">("on-premise");
 
@@ -318,22 +320,79 @@ export function Onboarding() {
   };
 
   // CI/CD Setup: 3. Create GitHub Pull Request (Dockerfile + workflow)
-  const createPullRequest = async () => {
+  const createPullRequest = async (autoMerge = true) => {
     setBusy("pull-request");
     setError("");
     try {
       const targetBranch = branch || selectedRepository?.defaultBranch || "main";
-      const data = await post<{ pullRequest: { number: number; htmlUrl: string; branch: string } }>(
+      const data = await post<{ pullRequest: { number: number; htmlUrl: string; branch: string; merged: boolean } }>(
         "/api/github/pull-request",
         {
           repository,
           branch: targetBranch,
           dockerfile,
+          autoMerge,
         },
       );
       setPullRequest(data.pullRequest);
+      if (data.pullRequest.merged) {
+        setPipelineStep("completed");
+        setTimeout(() => {
+          void fetchRun(repository);
+        }, 1500);
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "설정 PR 생성에 실패했습니다.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  // Full One-Click Pipeline: Analyze -> AI Dockerfile -> PR & Auto-Merge -> Actions Build
+  const runOneClickSetup = async () => {
+    setBusy("one-click-setup");
+    setError("");
+    setPipelineStep("analyzing");
+    try {
+      const targetBranch = branch || selectedRepository?.defaultBranch || "main";
+
+      // 1. Analyze repository
+      const analysisData = await post<{ analysis: RepositoryAnalysis }>("/api/github/analyze", {
+        repository,
+        branch: targetBranch,
+      });
+      setAnalysis(analysisData.analysis);
+
+      // 2. Generate Dockerfile with AI
+      setPipelineStep("generating");
+      const generateData = await post<{ setup: GeneratedSetup }>("/api/github/generate", {
+        repository,
+        branch: targetBranch,
+      });
+      setSetup(generateData.setup);
+      setDockerfile(generateData.setup.dockerfile);
+
+      // 3. Create PR and Auto-merge into main
+      setPipelineStep("merging");
+      const prData = await post<{ pullRequest: { number: number; htmlUrl: string; branch: string; merged: boolean } }>(
+        "/api/github/pull-request",
+        {
+          repository,
+          branch: targetBranch,
+          dockerfile: generateData.setup.dockerfile,
+          autoMerge: true,
+        },
+      );
+      setPullRequest(prData.pullRequest);
+      setPipelineStep("completed");
+
+      // 4. Poll and trigger latest workflow run
+      setTimeout(() => {
+        void fetchRun(repository);
+      }, 1500);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "원클릭 파이프라인 자동 구축에 실패했습니다.");
+      setPipelineStep("idle");
     } finally {
       setBusy("");
     }
@@ -579,26 +638,28 @@ export function Onboarding() {
             )}
           </div>
 
-          {/* Branch selector & Analyze button */}
+          {/* Branch selector & One-click automated setup button */}
           <div
             style={{
               display: "grid",
               gridTemplateColumns: "1fr auto",
-              gap: "10px",
+              gap: "12px",
               alignItems: "end",
               marginBottom: "16px",
             }}
           >
             <div className="form-group" style={{ margin: 0 }}>
-              <label className="form-label">기준 브랜치</label>
+              <label className="form-label" style={{ fontWeight: 600 }}>기준 브랜치</label>
               <select
                 className="form-select"
                 value={branch}
+                disabled={busy !== ""}
                 onChange={(e) => {
                   setBranch(e.target.value);
                   setAnalysis(null);
                   setSetup(null);
                   setPullRequest(null);
+                  setPipelineStep("idle");
                 }}
               >
                 {branches.length === 0 && <option>{branch || "main"}</option>}
@@ -612,250 +673,297 @@ export function Onboarding() {
             <button
               type="button"
               className="btn btn-primary"
-              style={{ height: "46px", padding: "0 20px", width: "auto" }}
+              style={{
+                height: "46px",
+                padding: "0 24px",
+                width: "auto",
+                fontWeight: 800,
+                fontSize: "14px",
+                background: "linear-gradient(135deg, #1971c2 0%, #0c8599 100%)",
+                border: "none",
+                boxShadow: "0 4px 12px rgba(12, 133, 153, 0.25)",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
               disabled={busy !== "" || !repository}
-              onClick={() => void analyze()}
+              onClick={() => void runOneClickSetup()}
             >
-              {busy === "analyze" ? "저장소 분석 중…" : "저장소 분석 시작"}
+              {busy === "one-click-setup" ? (
+                <>
+                  <span className="step-loading" style={{ borderColor: "white", borderTopColor: "transparent" }} />
+                  파이프라인 자동 구축 중…
+                </>
+              ) : (
+                <>
+                  <span>⚡</span>
+                  <span>원클릭 배포 준비 시작 (자동 머지)</span>
+                </>
+              )}
             </button>
           </div>
 
-          {/* Analysis Result */}
-          {analysis && (
+          {/* Real-time Pipeline Progress Box */}
+          {(pipelineStep !== "idle" || analysis || pullRequest || isBuilding || (run && run.conclusion === "success")) && (
             <div
               style={{
                 background: "white",
-                padding: "16px",
-                borderRadius: "12px",
-                border: "1px solid var(--border)",
+                borderRadius: "14px",
+                border: "1.5px solid var(--border)",
+                padding: "18px 20px",
                 marginBottom: "16px",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
               }}
             >
-              <div
-                style={{
-                  display: "flex",
-                  gap: "16px",
-                  flexWrap: "wrap",
-                  marginBottom: "12px",
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 700 }}>
-                    감지된 프레임워크
-                  </div>
-                  <div style={{ fontSize: "15px", fontWeight: 800, color: "var(--primary)" }}>
-                    {analysis.framework}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 700 }}>
-                    패키지 관리자
-                  </div>
-                  <div style={{ fontSize: "15px", fontWeight: 800 }}>
-                    {analysis.packageManager}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 700 }}>
-                    분석 대상 파일
-                  </div>
-                  <div style={{ fontSize: "15px", fontWeight: 800 }}>
-                    {analysis.files.length}개
-                  </div>
-                </div>
+              <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text-main)", marginBottom: "14px", display: "flex", alignItems: "center", gap: "8px" }}>
+                <span>📋</span>
+                <span>배포 파이프라인 진행 상태</span>
               </div>
 
-              <div
-                style={{
-                  display: "flex",
-                  gap: "6px",
-                  flexWrap: "wrap",
-                  marginBottom: "12px",
-                }}
-              >
-                {analysis.files.map((f) => (
-                  <code
-                    key={f.path}
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                {/* 1단계: 저장소 기술 스택 분석 */}
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <div
                     style={{
-                      fontSize: "11px",
-                      background: "#f1f3f5",
-                      padding: "2px 6px",
-                      borderRadius: "4px",
+                      width: "28px",
+                      height: "28px",
+                      borderRadius: "50%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "12px",
+                      fontWeight: 800,
+                      flexShrink: 0,
+                      background: analysis ? "#20c997" : pipelineStep === "analyzing" ? "#339af0" : "#e9ecef",
+                      color: analysis || pipelineStep === "analyzing" ? "white" : "#868e96",
                     }}
                   >
-                    {f.path}
-                    {f.truncated ? " (일부)" : ""}
-                  </code>
-                ))}
+                    {analysis ? "✓" : pipelineStep === "analyzing" ? <span className="step-loading" style={{ width: "12px", height: "12px", borderColor: "white", borderTopColor: "transparent" }} /> : "1"}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-main)" }}>
+                      1. 저장소 기술 스택 및 포트 분석
+                    </div>
+                    <div style={{ fontSize: "12px", color: "var(--text-sub)", marginTop: "2px" }}>
+                      {analysis
+                        ? `감지된 프레임워크: ${analysis.framework} (패키지: ${analysis.packageManager}, ${analysis.files.length}개 파일 검토)`
+                        : pipelineStep === "analyzing"
+                        ? "저장소 코드 구조와 종속성 파일을 분석하고 있습니다…"
+                        : "저장소 분석 대기 중"}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2단계: AI 최적화 Dockerfile 생성 */}
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <div
+                    style={{
+                      width: "28px",
+                      height: "28px",
+                      borderRadius: "50%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "12px",
+                      fontWeight: 800,
+                      flexShrink: 0,
+                      background: setup ? "#20c997" : pipelineStep === "generating" ? "#339af0" : "#e9ecef",
+                      color: setup || pipelineStep === "generating" ? "white" : "#868e96",
+                    }}
+                  >
+                    {setup ? "✓" : pipelineStep === "generating" ? <span className="step-loading" style={{ width: "12px", height: "12px", borderColor: "white", borderTopColor: "transparent" }} /> : "2"}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-main)" }}>
+                      2. AI 최적화 Dockerfile 자동 생성
+                    </div>
+                    <div style={{ fontSize: "12px", color: "var(--text-sub)", marginTop: "2px" }}>
+                      {setup
+                        ? "멀티스테이지 경량 Dockerfile 생성 완료"
+                        : pipelineStep === "generating"
+                        ? "프레임워크에 최적화된 컨테이너 빌드 설정을 작성하고 있습니다…"
+                        : "Dockerfile 생성 대기 중"}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3단계: CI/CD 워크플로우 등록 및 main 자동 병합 */}
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <div
+                    style={{
+                      width: "28px",
+                      height: "28px",
+                      borderRadius: "50%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "12px",
+                      fontWeight: 800,
+                      flexShrink: 0,
+                      background: pullRequest?.merged ? "#20c997" : pullRequest && !pullRequest.merged ? "#ff922b" : pipelineStep === "merging" ? "#339af0" : "#e9ecef",
+                      color: pullRequest || pipelineStep === "merging" ? "white" : "#868e96",
+                    }}
+                  >
+                    {pullRequest?.merged ? "✓" : pullRequest && !pullRequest.merged ? "!" : pipelineStep === "merging" ? <span className="step-loading" style={{ width: "12px", height: "12px", borderColor: "white", borderTopColor: "transparent" }} /> : "3"}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-main)" }}>
+                      3. CI/CD 워크플로우 등록 및 main 브랜치 자동 병합
+                    </div>
+                    <div style={{ fontSize: "12px", color: "var(--text-sub)", marginTop: "2px" }}>
+                      {pullRequest?.merged ? (
+                        <span style={{ color: "#099268", fontWeight: 600 }}>
+                          ✓ PR #{pullRequest.number} 생성 및 <code>{branch || "main"}</code> 브랜치 자동 머지 완료! (수동 승인 불필요)
+                        </span>
+                      ) : pullRequest && !pullRequest.merged ? (
+                        <span style={{ color: "#d9480f" }}>
+                          PR #{pullRequest.number} 생성 완료 (저장소 보호 규칙으로 인해 수동 머지가 필요합니다:{" "}
+                          <a href={pullRequest.htmlUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "underline", fontWeight: 700 }}>
+                            GitHub에서 머지하기 ↗
+                          </a>)
+                        </span>
+                      ) : pipelineStep === "merging" ? (
+                        "GitHub Actions 워크플로우 커밋 후 main 브랜치로 자동 머지하고 있습니다…"
+                      ) : (
+                        "GitHub Actions 워크플로우 등록 및 자동 머지 대기 중"
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4단계: GitHub Actions 컨테이너 이미지 빌드 */}
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <div
+                    style={{
+                      width: "28px",
+                      height: "28px",
+                      borderRadius: "50%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "12px",
+                      fontWeight: 800,
+                      flexShrink: 0,
+                      background: run?.conclusion === "success" ? "#20c997" : isBuilding ? "#fcc419" : "#e9ecef",
+                      color: run?.conclusion === "success" || isBuilding ? "white" : "#868e96",
+                    }}
+                  >
+                    {run?.conclusion === "success" ? "✓" : isBuilding ? <span className="step-loading" style={{ width: "12px", height: "12px", borderColor: "white", borderTopColor: "transparent" }} /> : "4"}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-main)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span>4. GitHub Actions 첫 Docker 이미지 빌드</span>
+                      {run?.htmlUrl && (
+                        <a href={run.htmlUrl} target="_blank" rel="noreferrer" style={{ fontSize: "11px", color: "var(--primary)", textDecoration: "underline" }}>
+                          실시간 빌드 로그 ↗
+                        </a>
+                      )}
+                    </div>
+                    <div style={{ fontSize: "12px", color: "var(--text-sub)", marginTop: "2px" }}>
+                      {run?.conclusion === "success" ? (
+                        <span style={{ color: "#099268", fontWeight: 700 }}>
+                          🎉 첫 번째 컨테이너 이미지 빌드 완료! ({run.headSha ? run.headSha.slice(0, 7) : "latest"}) — 이제 아래 탭에서 서버로 배포할 수 있습니다.
+                        </span>
+                      ) : isBuilding ? (
+                        <span style={{ color: "#b17900", fontWeight: 600 }}>
+                          GitHub Actions에서 Docker 이미지를 빌드하고 있습니다… (커밋: <code>{run?.headSha ? run.headSha.slice(0, 7) : "main"}</code>)
+                        </span>
+                      ) : (
+                        "main 브랜치 병합 후 자동으로 GitHub Actions 빌드가 실행됩니다."
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              {analysis.warnings.length > 0 && (
-                <div style={{ marginBottom: "12px" }}>
-                  {analysis.warnings.map((w, idx) => (
-                    <div key={idx} style={{ fontSize: "12px", color: "#e03131" }}>
-                      ⚠️ {w}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {!setup && (
+              {/* 고급 설정 아코디언 (Dockerfile 확인 및 개별 실행) */}
+              <div style={{ marginTop: "16px", paddingTop: "12px", borderTop: "1px dashed var(--border)" }}>
                 <button
                   type="button"
-                  className="btn btn-secondary"
-                  disabled={busy !== "" || analysis.files.length === 0}
-                  onClick={() => void generate()}
-                >
-                  {busy === "generate" ? "AI가 Dockerfile 생성 중…" : "AI Dockerfile 생성하기"}
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* Generated Setup (Dockerfile & Workflow) */}
-          {setup && (
-            <div
-              style={{
-                background: "white",
-                padding: "16px",
-                borderRadius: "12px",
-                border: "1px solid var(--border)",
-                marginBottom: "16px",
-              }}
-            >
-              <div style={{ marginBottom: "12px" }}>
-                <div
+                  className="btn-link"
                   style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    marginBottom: "6px",
-                  }}
-                >
-                  <label className="form-label" style={{ margin: 0 }}>
-                    Dockerfile (직접 수정 가능)
-                  </label>
-                  <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>AI 생성 결과</span>
-                </div>
-                <textarea
-                  className="form-input"
-                  style={{
-                    fontFamily: "monospace",
                     fontSize: "12px",
-                    height: "180px",
-                    resize: "vertical",
+                    color: "var(--text-muted)",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "4px",
+                    cursor: "pointer",
+                    padding: 0,
                   }}
-                  value={dockerfile}
-                  onChange={(e) => setDockerfile(e.target.value)}
-                  spellCheck={false}
-                />
-              </div>
-
-              <div
-                style={{
-                  padding: "10px 14px",
-                  background: "#f8f9fa",
-                  borderRadius: "8px",
-                  border: "1px solid var(--border)",
-                  marginBottom: "14px",
-                  fontSize: "12px",
-                  color: "var(--text-muted)",
-                }}
-              >
-                📦 <code>.github/workflows/deploy.yml</code> (GitHub Actions 빌드 & Docker Hub 배포 워크플로우)도 함께 PR에 포함됩니다.
-              </div>
-
-              {!pullRequest && (
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={busy !== "" || !dockerfile}
-                  onClick={() => void createPullRequest()}
+                  onClick={() => setShowAdvancedSetup(!showAdvancedSetup)}
                 >
-                  {busy === "pull-request" ? "GitHub 설정 PR 생성 중…" : "GitHub에 설정 PR 만들기 →"}
+                  {showAdvancedSetup ? "▲ 생성된 Dockerfile 확인 접기" : "▼ 고급: 생성된 Dockerfile 확인 및 개별 실행 옵션"}
                 </button>
-              )}
-            </div>
-          )}
 
-          {/* Pull Request Created Result */}
-          {pullRequest && (
-            <div
-              style={{
-                background: "#e6fcf5",
-                border: "1.5px solid #20c997",
-                borderRadius: "12px",
-                padding: "16px",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  marginBottom: "8px",
-                }}
-              >
-                <div style={{ fontSize: "14px", fontWeight: 800, color: "#099268" }}>
-                  ✓ 설정 PR #{pullRequest.number} 생성 완료!
-                </div>
-                <a
-                  href={pullRequest.htmlUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="pill-btn"
-                  style={{
-                    background: "#20c997",
-                    color: "white",
-                    borderColor: "#20c997",
-                    fontWeight: 700,
-                  }}
-                >
-                  GitHub에서 PR 검토 및 머지하기 ↗
-                </a>
-              </div>
-              <p style={{ fontSize: "12px", color: "#2b8a3e", margin: 0 }}>
-                GitHub에서 위 PR을 <strong>Merge</strong>하면 첫 이미지 빌드가 시작됩니다. 빌드가 완료되면 아래 배포 탭에서 바로 서버에 배포할 수 있습니다.
-              </p>
+                {showAdvancedSetup && (
+                  <div style={{ marginTop: "12px", padding: "14px", background: "#f8f9fa", borderRadius: "10px", border: "1px solid var(--border)" }}>
+                    {analysis && (
+                      <div style={{ marginBottom: "12px" }}>
+                        <div style={{ fontSize: "12px", fontWeight: 700, marginBottom: "6px" }}>감지된 분석 파일:</div>
+                        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                          {analysis.files.map((f) => (
+                            <code key={f.path} style={{ fontSize: "11px", background: "#e9ecef", padding: "2px 6px", borderRadius: "4px" }}>
+                              {f.path}
+                            </code>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
-              {/* 실시간 빌드 진행 감지 */}
-              {isBuilding && (
-                <div style={{ marginTop: "14px", padding: "12px", background: "#fff9db", border: "1.5px solid #ffe066", borderRadius: "10px" }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#b17900", fontWeight: 800, fontSize: "13px" }}>
-                      <span className="step-loading" />
-                      <span>PR 머지 감지됨! GitHub Actions에서 Docker 이미지를 빌드하고 있습니다…</span>
+                    <div style={{ marginBottom: "10px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                        <label className="form-label" style={{ margin: 0, fontSize: "12px" }}>
+                          Dockerfile 내용 (수정 가능)
+                        </label>
+                      </div>
+                      <textarea
+                        className="form-input"
+                        style={{
+                          fontFamily: "monospace",
+                          fontSize: "12px",
+                          height: "150px",
+                          resize: "vertical",
+                          background: "white",
+                        }}
+                        value={dockerfile}
+                        onChange={(e) => setDockerfile(e.target.value)}
+                        placeholder="AI가 생성한 Dockerfile이 여기에 표시됩니다."
+                        spellCheck={false}
+                      />
                     </div>
-                    {run?.htmlUrl && (
-                      <a href={run.htmlUrl} target="_blank" rel="noreferrer" style={{ fontSize: "12px", color: "#b17900", textDecoration: "underline" }}>
-                        실시간 로그 보기 ↗
-                      </a>
-                    )}
-                  </div>
-                  <div style={{ fontSize: "12px", color: "#868e96", marginTop: "4px" }}>
-                    커밋 <code>{run?.headSha ? run.headSha.slice(0, 7) : "main"}</code> 이미지 빌드 중
-                  </div>
-                </div>
-              )}
 
-              {/* 첫 빌드 완료 감지 */}
-              {!isBuilding && run?.conclusion === "success" && (
-                <div style={{ marginTop: "14px", padding: "12px", background: "white", border: "1.5px solid #20c997", borderRadius: "10px" }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <span style={{ fontWeight: 800, color: "#099268", fontSize: "14px" }}>
-                      🎉 첫 번째 Docker 이미지 빌드 완료! ({run?.headSha.slice(0, 7)})
-                    </span>
-                    {run?.htmlUrl && (
-                      <a href={run.htmlUrl} target="_blank" rel="noreferrer" style={{ fontSize: "12px", color: "#099268" }}>
-                        빌드 로그 ↗
-                      </a>
-                    )}
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ fontSize: "12px", padding: "6px 14px", width: "auto" }}
+                        disabled={busy !== "" || !repository}
+                        onClick={() => void analyze()}
+                      >
+                        {busy === "analyze" ? "분석 중…" : "저장소만 다시 분석"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ fontSize: "12px", padding: "6px 14px", width: "auto" }}
+                        disabled={busy !== "" || !analysis}
+                        onClick={() => void generate()}
+                      >
+                        {busy === "generate" ? "생성 중…" : "Dockerfile만 재생성"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ fontSize: "12px", padding: "6px 14px", width: "auto" }}
+                        disabled={busy !== "" || !dockerfile}
+                        onClick={() => void createPullRequest(false)}
+                      >
+                        {busy === "pull-request" ? "PR 생성 중…" : "수동 승인 PR 생성 (자동 머지 X)"}
+                      </button>
+                    </div>
                   </div>
-                  <div style={{ fontSize: "12px", color: "#2b8a3e", marginTop: "4px" }}>
-                    Docker Hub에 새 이미지가 성공적으로 배포 준비되었습니다. 아래 배포 탭에서 첫 릴리즈를 진행하세요!
-                  </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           )}
         </div>
