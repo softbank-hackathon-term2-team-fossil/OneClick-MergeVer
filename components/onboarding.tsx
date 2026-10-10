@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   DeploymentRecord,
+  GeneratedSetup,
   OnPremiseDeployment,
+  RepositoryAnalysis,
   RepositoryOption,
   SavedDeploymentTarget,
   WorkflowRunSummary,
@@ -23,6 +25,13 @@ export function Onboarding() {
   const [connected, setConnected] = useState(false);
   const [repositories, setRepositories] = useState<RepositoryOption[]>([]);
   const [repository, setRepository] = useState("");
+  const [branches, setBranches] = useState<string[]>([]);
+  const [branch, setBranch] = useState("");
+  const [analysis, setAnalysis] = useState<RepositoryAnalysis | null>(null);
+  const [setup, setSetup] = useState<GeneratedSetup | null>(null);
+  const [dockerfile, setDockerfile] = useState("");
+  const [pullRequest, setPullRequest] = useState<{ number: number; htmlUrl: string; branch: string } | null>(null);
+  const [showCiSetup, setShowCiSetup] = useState(false);
   const [selectedInfra, setSelectedInfra] = useState<"on-premise" | "cloud">("on-premise");
 
   const [run, setRun] = useState<WorkflowRunSummary | null>(null);
@@ -63,6 +72,7 @@ export function Onboarding() {
       setRepositories(data.repositories);
       if (data.repositories.length > 0) {
         setRepository(data.repositories[0].fullName);
+        setBranch(data.repositories[0].defaultBranch || "main");
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "저장소를 불러오지 못했습니다.");
@@ -102,6 +112,34 @@ export function Onboarding() {
       setError(caught instanceof Error ? caught.message : "연결 해제에 실패했습니다.");
     }
   };
+
+  // Load branches when repository changes
+  useEffect(() => {
+    if (!repository || !connected) {
+      setBranches([]);
+      setBranch("");
+      return;
+    }
+    const controller = new AbortController();
+    const loadBranches = async () => {
+      try {
+        const query = new URLSearchParams({ repository });
+        const data = await requestJson<{ branches: string[] }>(
+          `/api/github/branches?${query}`,
+          { signal: controller.signal },
+        );
+        setBranches(data.branches);
+        if (data.branches.length > 0 && !data.branches.includes(branch)) {
+          setBranch(selectedRepository?.defaultBranch ?? data.branches[0]);
+        }
+      } catch (caught) {
+        if (caught instanceof DOMException && caught.name === "AbortError") return;
+        setBranches([]);
+      }
+    };
+    void loadBranches();
+    return () => controller.abort();
+  }, [repository, connected, selectedRepository, branch]);
 
   // 3. Load saved server when repository changes
   useEffect(() => {
@@ -238,6 +276,68 @@ export function Onboarding() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+
+  // CI/CD Setup: 1. Analyze repository
+  const analyze = async () => {
+    setBusy("analyze");
+    setError("");
+    setAnalysis(null);
+    setSetup(null);
+    setPullRequest(null);
+    try {
+      const targetBranch = branch || selectedRepository?.defaultBranch || "main";
+      const data = await post<{ analysis: RepositoryAnalysis }>("/api/github/analyze", {
+        repository,
+        branch: targetBranch,
+      });
+      setAnalysis(data.analysis);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "저장소 분석에 실패했습니다.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  // CI/CD Setup: 2. Generate Dockerfile with AI
+  const generate = async () => {
+    setBusy("generate");
+    setError("");
+    try {
+      const targetBranch = branch || selectedRepository?.defaultBranch || "main";
+      const data = await post<{ setup: GeneratedSetup }>("/api/github/generate", {
+        repository,
+        branch: targetBranch,
+      });
+      setSetup(data.setup);
+      setDockerfile(data.setup.dockerfile);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Dockerfile 생성에 실패했습니다.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  // CI/CD Setup: 3. Create GitHub Pull Request (Dockerfile + workflow)
+  const createPullRequest = async () => {
+    setBusy("pull-request");
+    setError("");
+    try {
+      const targetBranch = branch || selectedRepository?.defaultBranch || "main";
+      const data = await post<{ pullRequest: { number: number; htmlUrl: string; branch: string } }>(
+        "/api/github/pull-request",
+        {
+          repository,
+          branch: targetBranch,
+          dockerfile,
+        },
+      );
+      setPullRequest(data.pullRequest);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "설정 PR 생성에 실패했습니다.");
+    } finally {
+      setBusy("");
+    }
+  };
 
   // Execute rolling deployment with step progression simulation
   // With `rollbackOf`, the saved server is redeployed with that past deployment's commit.
@@ -401,7 +501,14 @@ export function Onboarding() {
             className="form-select"
             value={repository}
             onChange={(e) => {
-              setRepository(e.target.value);
+              const next = e.target.value;
+              setRepository(next);
+              const found = repositories.find((r) => r.fullName === next);
+              setBranch(found?.defaultBranch || "main");
+              setAnalysis(null);
+              setSetup(null);
+              setDockerfile("");
+              setPullRequest(null);
               setDeployment(null);
               setDeployedSha(null);
               setDeployStep(0);
@@ -414,6 +521,318 @@ export function Onboarding() {
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      {/* CI/CD SETUP CARD (INITIAL SETUP OR RECONFIGURATION) */}
+      {connected && repository && (!run || showCiSetup) && (
+        <div
+          className="card"
+          style={{
+            border: !run ? "1.5px solid #ff922b" : "1px solid var(--border)",
+            background: !run ? "#fffdf5" : "var(--card-bg)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              marginBottom: "14px",
+            }}
+          >
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ fontSize: "20px" }}>🛠️</span>
+                <h3 className="card-title" style={{ margin: 0 }}>
+                  {!run ? "1단계: 빌드 파이프라인(CI/CD) 설정" : "CI/CD 설정 다시 생성"}
+                </h3>
+                {!run && (
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      padding: "2px 8px",
+                      borderRadius: "99px",
+                      background: "#ff922b",
+                      color: "white",
+                    }}
+                  >
+                    최초 필수
+                  </span>
+                )}
+              </div>
+              <p className="card-desc" style={{ marginTop: "6px", marginBottom: 0 }}>
+                {!run
+                  ? "이 저장소에는 아직 Docker 빌드 파이프라인이 없습니다. AI가 코드를 분석하여 Dockerfile과 GitHub Actions 워크플로우를 자동 생성하고 PR을 만듭니다."
+                  : "AI로 저장소를 다시 분석하고 Dockerfile 및 GitHub Actions PR을 새로 생성합니다."}
+              </p>
+            </div>
+            {run && (
+              <button
+                type="button"
+                className="btn-link"
+                onClick={() => setShowCiSetup(false)}
+              >
+                닫기 ✕
+              </button>
+            )}
+          </div>
+
+          {/* Branch selector & Analyze button */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr auto",
+              gap: "10px",
+              alignItems: "end",
+              marginBottom: "16px",
+            }}
+          >
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label">기준 브랜치</label>
+              <select
+                className="form-select"
+                value={branch}
+                onChange={(e) => {
+                  setBranch(e.target.value);
+                  setAnalysis(null);
+                  setSetup(null);
+                  setPullRequest(null);
+                }}
+              >
+                {branches.length === 0 && <option>{branch || "main"}</option>}
+                {branches.map((b) => (
+                  <option key={b} value={b}>
+                    {b}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ height: "46px", padding: "0 20px", width: "auto" }}
+              disabled={busy !== "" || !repository}
+              onClick={() => void analyze()}
+            >
+              {busy === "analyze" ? "저장소 분석 중…" : "저장소 분석 시작"}
+            </button>
+          </div>
+
+          {/* Analysis Result */}
+          {analysis && (
+            <div
+              style={{
+                background: "white",
+                padding: "16px",
+                borderRadius: "12px",
+                border: "1px solid var(--border)",
+                marginBottom: "16px",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  gap: "16px",
+                  flexWrap: "wrap",
+                  marginBottom: "12px",
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 700 }}>
+                    감지된 프레임워크
+                  </div>
+                  <div style={{ fontSize: "15px", fontWeight: 800, color: "var(--primary)" }}>
+                    {analysis.framework}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 700 }}>
+                    패키지 관리자
+                  </div>
+                  <div style={{ fontSize: "15px", fontWeight: 800 }}>
+                    {analysis.packageManager}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 700 }}>
+                    분석 대상 파일
+                  </div>
+                  <div style={{ fontSize: "15px", fontWeight: 800 }}>
+                    {analysis.files.length}개
+                  </div>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: "6px",
+                  flexWrap: "wrap",
+                  marginBottom: "12px",
+                }}
+              >
+                {analysis.files.map((f) => (
+                  <code
+                    key={f.path}
+                    style={{
+                      fontSize: "11px",
+                      background: "#f1f3f5",
+                      padding: "2px 6px",
+                      borderRadius: "4px",
+                    }}
+                  >
+                    {f.path}
+                    {f.truncated ? " (일부)" : ""}
+                  </code>
+                ))}
+              </div>
+
+              {analysis.warnings.length > 0 && (
+                <div style={{ marginBottom: "12px" }}>
+                  {analysis.warnings.map((w, idx) => (
+                    <div key={idx} style={{ fontSize: "12px", color: "#e03131" }}>
+                      ⚠️ {w}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!setup && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={busy !== "" || analysis.files.length === 0}
+                  onClick={() => void generate()}
+                >
+                  {busy === "generate" ? "AI가 Dockerfile 생성 중…" : "AI Dockerfile 생성하기"}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Generated Setup (Dockerfile & Workflow) */}
+          {setup && (
+            <div
+              style={{
+                background: "white",
+                padding: "16px",
+                borderRadius: "12px",
+                border: "1px solid var(--border)",
+                marginBottom: "16px",
+              }}
+            >
+              <div style={{ marginBottom: "12px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: "6px",
+                  }}
+                >
+                  <label className="form-label" style={{ margin: 0 }}>
+                    Dockerfile (직접 수정 가능)
+                  </label>
+                  <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>AI 생성 결과</span>
+                </div>
+                <textarea
+                  className="form-input"
+                  style={{
+                    fontFamily: "monospace",
+                    fontSize: "12px",
+                    height: "180px",
+                    resize: "vertical",
+                  }}
+                  value={dockerfile}
+                  onChange={(e) => setDockerfile(e.target.value)}
+                  spellCheck={false}
+                />
+              </div>
+
+              <div
+                style={{
+                  padding: "10px 14px",
+                  background: "#f8f9fa",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border)",
+                  marginBottom: "14px",
+                  fontSize: "12px",
+                  color: "var(--text-muted)",
+                }}
+              >
+                📦 <code>.github/workflows/deploy.yml</code> (GitHub Actions 빌드 & Docker Hub 배포 워크플로우)도 함께 PR에 포함됩니다.
+              </div>
+
+              {!pullRequest && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={busy !== "" || !dockerfile}
+                  onClick={() => void createPullRequest()}
+                >
+                  {busy === "pull-request" ? "GitHub 설정 PR 생성 중…" : "GitHub에 설정 PR 만들기 →"}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Pull Request Created Result */}
+          {pullRequest && (
+            <div
+              style={{
+                background: "#e6fcf5",
+                border: "1.5px solid #20c997",
+                borderRadius: "12px",
+                padding: "16px",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: "8px",
+                }}
+              >
+                <div style={{ fontSize: "14px", fontWeight: 800, color: "#099268" }}>
+                  ✓ 설정 PR #{pullRequest.number} 생성 완료!
+                </div>
+                <a
+                  href={pullRequest.htmlUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="pill-btn"
+                  style={{
+                    background: "#20c997",
+                    color: "white",
+                    borderColor: "#20c997",
+                    fontWeight: 700,
+                  }}
+                >
+                  GitHub에서 PR 검토 및 머지하기 ↗
+                </a>
+              </div>
+              <p style={{ fontSize: "12px", color: "#2b8a3e", margin: 0 }}>
+                GitHub에서 위 PR을 <strong>Merge</strong>하면 첫 이미지 빌드가 시작됩니다. 빌드가 완료되면 아래 배포 탭에서 바로 서버에 배포할 수 있습니다.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* RE-OPEN CI/CD SETUP BUTTON (When run exists and card is closed) */}
+      {connected && repository && run && !showCiSetup && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
+          <button
+            type="button"
+            className="btn-link"
+            style={{ fontSize: "12px", color: "var(--text-muted)" }}
+            onClick={() => setShowCiSetup(true)}
+          >
+            ⚙️ CI/CD 파이프라인 (Dockerfile & Actions PR) 다시 설정하기
+          </button>
         </div>
       )}
 
