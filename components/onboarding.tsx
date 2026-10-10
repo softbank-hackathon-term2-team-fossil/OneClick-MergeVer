@@ -817,6 +817,45 @@ export function Onboarding() {
               <p style={{ fontSize: "12px", color: "#2b8a3e", margin: 0 }}>
                 GitHub에서 위 PR을 <strong>Merge</strong>하면 첫 이미지 빌드가 시작됩니다. 빌드가 완료되면 아래 배포 탭에서 바로 서버에 배포할 수 있습니다.
               </p>
+
+              {/* 실시간 빌드 진행 감지 */}
+              {isBuilding && (
+                <div style={{ marginTop: "14px", padding: "12px", background: "#fff9db", border: "1.5px solid #ffe066", borderRadius: "10px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#b17900", fontWeight: 800, fontSize: "13px" }}>
+                      <span className="step-loading" />
+                      <span>PR 머지 감지됨! GitHub Actions에서 Docker 이미지를 빌드하고 있습니다…</span>
+                    </div>
+                    {run?.htmlUrl && (
+                      <a href={run.htmlUrl} target="_blank" rel="noreferrer" style={{ fontSize: "12px", color: "#b17900", textDecoration: "underline" }}>
+                        실시간 로그 보기 ↗
+                      </a>
+                    )}
+                  </div>
+                  <div style={{ fontSize: "12px", color: "#868e96", marginTop: "4px" }}>
+                    커밋 <code>{run?.headSha ? run.headSha.slice(0, 7) : "main"}</code> 이미지 빌드 중
+                  </div>
+                </div>
+              )}
+
+              {/* 첫 빌드 완료 감지 */}
+              {!isBuilding && run?.conclusion === "success" && (
+                <div style={{ marginTop: "14px", padding: "12px", background: "white", border: "1.5px solid #20c997", borderRadius: "10px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ fontWeight: 800, color: "#099268", fontSize: "14px" }}>
+                      🎉 첫 번째 Docker 이미지 빌드 완료! ({run?.headSha.slice(0, 7)})
+                    </span>
+                    {run?.htmlUrl && (
+                      <a href={run.htmlUrl} target="_blank" rel="noreferrer" style={{ fontSize: "12px", color: "#099268" }}>
+                        빌드 로그 ↗
+                      </a>
+                    )}
+                  </div>
+                  <div style={{ fontSize: "12px", color: "#2b8a3e", marginTop: "4px" }}>
+                    Docker Hub에 새 이미지가 성공적으로 배포 준비되었습니다. 아래 배포 탭에서 첫 릴리즈를 진행하세요!
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -839,6 +878,109 @@ export function Onboarding() {
       {/* 2. INFRASTRUCTURE SELECTOR */}
       {connected && repository && (
         <>
+          {/* GITHUB ACTIONS LIVE BUILD PROGRESS (GLOBAL) */}
+          {isBuilding && (
+            <div
+              className="status-card building"
+              style={{
+                flexDirection: "column",
+                alignItems: "stretch",
+                gap: "10px",
+                marginBottom: "20px",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <span className="step-loading" />
+                  <strong style={{ fontSize: "15px" }}>GitHub Actions 빌드 진행 중…</strong>
+                </div>
+                {run?.htmlUrl && (
+                  <a
+                    href={run.htmlUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn-link"
+                    style={{ fontSize: "12px", color: "inherit", fontWeight: 700 }}
+                  >
+                    실시간 로그 보기 ↗
+                  </a>
+                )}
+              </div>
+              <div
+                className="progress-steps"
+                style={{
+                  margin: 0,
+                  padding: "12px",
+                  background: "rgba(255, 255, 255, 0.75)",
+                  borderRadius: "10px",
+                }}
+              >
+                <div className="step-item">
+                  <span className="step-check">✓</span>
+                  <span>코드 Push 감지 완료 ({run?.headSha ? run.headSha.slice(0, 7) : "main"})</span>
+                </div>
+                <div className="step-item" style={{ color: "#b17900" }}>
+                  <span className="step-loading" />
+                  <span>Docker 이미지 빌드 & 테스트 진행 중…</span>
+                </div>
+                <div className="step-item" style={{ color: "#adb5bd" }}>
+                  <span className="step-pending">3</span>
+                  <span>Docker Hub 비공개 저장소 등록 대기</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* NEW RELEASE READY NOTIFICATION (GLOBAL) */}
+          {!isBuilding && busy !== "deploy" && hasNewRelease && (
+            <div
+              className="status-card new"
+              style={{
+                marginBottom: "20px",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                background: "#eef2ff",
+                border: "1.5px solid #c7d2fe",
+                padding: "16px 20px",
+                borderRadius: "16px",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <span className="status-icon" style={{ fontSize: "28px" }}>📦</span>
+                <div className="status-text">
+                  <div style={{ fontSize: "15px", fontWeight: 800, color: "#3730a3" }}>
+                    새로운 Docker 이미지가 준비되었습니다!
+                  </div>
+                  <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" }}>
+                    최신 커밋: <code>{run?.headSha.slice(0, 7)}</code>
+                    {run?.htmlUrl && (
+                      <a
+                        href={run.htmlUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ marginLeft: "8px", color: "var(--primary)", fontWeight: 700 }}
+                      >
+                        빌드 로그 ↗
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {savedTarget && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ width: "auto", height: "42px", padding: "0 18px", fontSize: "14px", flexShrink: 0 }}
+                  disabled={busy !== ""}
+                  onClick={() => void deploy(true)}
+                >
+                  {busy === "deploy" ? "배포 진행 중…" : "새 버전 롤링 배포하기 →"}
+                </button>
+              )}
+            </div>
+          )}
+
           <div className="infra-tabs">
             <button
               className={`infra-tab-btn ${selectedInfra === "on-premise" ? "active" : ""}`}
@@ -1151,38 +1293,7 @@ export function Onboarding() {
                     </div>
                   )}
 
-                  {/* 2. GITHUB ACTIONS BUILD PROGRESS (IN PROGRESS) */}
-                  {isBuilding && (
-                    <div className="status-card building" style={{ flexDirection: "column", alignItems: "stretch", gap: "10px", marginBottom: "16px" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                          <span className="step-loading" />
-                          <strong style={{ fontSize: "14px" }}>GitHub Actions 빌드 진행 중…</strong>
-                        </div>
-                        {run?.htmlUrl && (
-                          <a href={run.htmlUrl} target="_blank" rel="noreferrer" className="btn-link" style={{ fontSize: "12px", color: "inherit" }}>
-                            실시간 로그 보기 ↗
-                          </a>
-                        )}
-                      </div>
-                      <div className="progress-steps" style={{ margin: 0, padding: "10px", background: "rgba(255,255,255,0.7)" }}>
-                        <div className="step-item">
-                          <span className="step-check">✓</span>
-                          <span>코드 Push 감지 완료 ({run?.headSha ? run.headSha.slice(0, 7) : "main"})</span>
-                        </div>
-                        <div className="step-item" style={{ color: "#b17900" }}>
-                          <span className="step-loading" />
-                          <span>Docker 이미지 빌드 & 테스트 진행 중…</span>
-                        </div>
-                        <div className="step-item" style={{ color: "#adb5bd" }}>
-                          <span className="step-pending">3</span>
-                          <span>Docker Hub 비공개 저장소 등록 대기</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* 3. ROLLING DEPLOYMENT PROGRESS (DEPLOYING) */}
+                  {/* 2. ROLLING DEPLOYMENT PROGRESS (DEPLOYING) */}
                   {busy === "deploy" && (
                     <div className="status-card" style={{ background: "#fff5ee", border: "1.5px solid #ffd8a8", flexDirection: "column", alignItems: "stretch", gap: "10px", marginBottom: "16px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
