@@ -39,7 +39,17 @@ export async function POST(request: NextRequest): Promise<Response> {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const emit = (event: DeployEvent) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+      let closed = false;
+      const emit = (event: DeployEvent) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        } catch {
+          // The browser may navigate away while a long Azure command is running.
+          // Do not attempt another enqueue after the stream has been closed.
+          closed = true;
+        }
+      };
       let cleanup: () => Promise<void> = async () => undefined;
       let recordId: string | undefined;
       try {
@@ -70,8 +80,15 @@ export async function POST(request: NextRequest): Promise<Response> {
         emit({ phase: "error", message: publicCloudError(error) });
       } finally {
         await cleanup();
-        controller.close();
+        if (!closed) {
+          closed = true;
+          controller.close();
+        }
       }
+    },
+    cancel() {
+      // The client disconnected; the deployment may continue remotely, but the
+      // server must stop writing to this stream.
     },
   });
   return new Response(stream, { headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store" } });
