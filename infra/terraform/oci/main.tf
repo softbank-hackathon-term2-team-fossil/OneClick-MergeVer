@@ -79,6 +79,38 @@ resource "oci_core_subnet" "main" {
   dns_label         = "app"
 }
 
+# Managed PostgreSQL only accepts a private subnet; the VM reaches it over the VCN.
+resource "oci_core_security_list" "db" {
+  compartment_id = local.compartment_id
+  vcn_id         = oci_core_vcn.main.id
+  display_name   = "${local.name}-db-sl"
+
+  egress_security_rules {
+    destination = "0.0.0.0/0"
+    protocol    = "all"
+  }
+
+  ingress_security_rules {
+    protocol = "6"
+    source   = "10.20.0.0/16"
+
+    tcp_options {
+      min = 5432
+      max = 5432
+    }
+  }
+}
+
+resource "oci_core_subnet" "db" {
+  compartment_id             = local.compartment_id
+  vcn_id                     = oci_core_vcn.main.id
+  display_name               = "${local.name}-db-subnet"
+  cidr_block                 = "10.20.2.0/24"
+  prohibit_public_ip_on_vnic = true
+  security_list_ids          = [oci_core_security_list.db.id]
+  dns_label                  = "db"
+}
+
 data "oci_core_images" "ubuntu" {
   compartment_id           = local.compartment_id
   operating_system         = "Canonical Ubuntu"
@@ -162,7 +194,7 @@ resource "oci_psql_db_system" "db" {
   instance_memory_size_in_gbs = var.db_memory_gb
 
   network_details {
-    subnet_id = oci_core_subnet.main.id
+    subnet_id = oci_core_subnet.db.id
   }
 
   storage_details {

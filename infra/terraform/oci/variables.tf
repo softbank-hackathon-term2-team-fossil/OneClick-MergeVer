@@ -67,8 +67,8 @@ variable "allowed_cidr" {
 
 variable "db_mode" {
   type        = string
-  default     = "container"
-  description = "managed = OCI Database with PostgreSQL (needs the dbsystem-count service limit), container = PostgreSQL container on the VM."
+  default     = "managed"
+  description = "managed = OCI Database with PostgreSQL, container = PostgreSQL container on the VM."
 
   validation {
     condition     = contains(["managed", "container"], var.db_mode)
@@ -81,17 +81,18 @@ variable "db_version" {
   default = "16"
 }
 
+# The E4 shapes count against dbsystem-count, which is 0 on this tenancy; E5/E6 have their own limits.
 variable "db_shape" {
   type    = string
-  default = "PostgreSQL.VM.Standard.E4.Flex.2.32GB"
+  default = "PostgreSQL.VM.Standard.E5.Flex"
 }
 
 variable "db_ocpus" {
   type    = number
-  default = 2
+  default = 1
 }
 
 variable "db_memory_gb" {
   type    = number
-  default = 32
+  default = 16
 }
