@@ -10,6 +10,7 @@ type SetupPullRequestInput = {
   baseBranch: string;
   dockerfile: string;
   workflow: string;
+  autoMerge?: boolean;
 };
 
 async function getExistingFileSha(
@@ -56,10 +57,12 @@ export async function createSetupPullRequest({
   baseBranch,
   dockerfile,
   workflow,
+  autoMerge = true,
 }: SetupPullRequestInput): Promise<{
   number: number;
   htmlUrl: string;
   branch: string;
+  merged: boolean;
 }> {
   const { owner, repo } = parseRepository(repository);
   const base = await client.rest.git.getRef({
@@ -114,5 +117,32 @@ export async function createSetupPullRequest({
     ].join("\n"),
   });
 
-  return { number: pull.data.number, htmlUrl: pull.data.html_url, branch };
+  let merged = false;
+  if (autoMerge) {
+    try {
+      const mergeResponse = await client.rest.pulls.merge({
+        owner,
+        repo,
+        pull_number: pull.data.number,
+        merge_method: "squash",
+        commit_title: `Set up SBSB container builds (#${pull.data.number})`,
+        commit_message: "Auto-merged by SBSB for instant deployment pipeline readiness.",
+      });
+      merged = Boolean(mergeResponse.data.merged);
+
+      if (merged) {
+        // Clean up temporary setup branch
+        await client.rest.git.deleteRef({
+          owner,
+          repo,
+          ref: `heads/${branch}`,
+        }).catch(() => {});
+      }
+    } catch {
+      // In case of branch protection or required checks, leave PR open for manual merge
+      merged = false;
+    }
+  }
+
+  return { number: pull.data.number, htmlUrl: pull.data.html_url, branch, merged };
 }

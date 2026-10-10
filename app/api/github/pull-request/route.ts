@@ -12,6 +12,7 @@ const schema = z.object({
   repository: z.string().min(3).max(200),
   branch: z.string().min(1).max(250),
   dockerfile: z.string().min(20).max(12_000),
+  autoMerge: z.boolean().optional(),
 });
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -25,6 +26,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       baseBranch: input.branch,
       dockerfile: validateDockerfile(input.dockerfile),
       workflow: createWorkflow(input.branch, image.repositoryUri, image.tagPrefix),
+      autoMerge: input.autoMerge ?? true,
     });
     return NextResponse.json({ pullRequest });
   } catch (error) {
