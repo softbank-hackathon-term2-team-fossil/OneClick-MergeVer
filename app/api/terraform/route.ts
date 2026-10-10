@@ -8,13 +8,14 @@ export const runtime = "nodejs";
 export const maxDuration = 1_800;
 
 const schema = z.object({
-  provider: z.enum(["gcp", "oci"]),
+  provider: z.enum(["gcp", "gcp-db", "oci"]),
   action: z.enum(["plan", "apply", "destroy"]),
   image: z.string().max(300).default(""),
   port: z.coerce.number().int().min(1).max(65_535).default(8000),
 });
 
-// Creates or removes a VM and a managed PostgreSQL database with the Terraform modules in infra/terraform.
+// Creates or removes infrastructure with the Terraform modules in infra/terraform:
+// a VM plus managed PostgreSQL (gcp, oci) or a Cloud SQL database for Cloud Run (gcp-db).
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     requireInstallationId(request);

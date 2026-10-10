@@ -170,9 +170,12 @@ locals {
   startup_script = <<-SCRIPT
     #!/bin/bash
     set -eu
+    export DEBIAN_FRONTEND=noninteractive
     apt-get update -y
     apt-get install -y docker.io iptables-persistent
     systemctl enable --now docker
+    # Lets SBSB deploy over SSH as the default user without sudo.
+    usermod -aG docker ubuntu
     iptables -I INPUT -p tcp --dport 80 -j ACCEPT
     netfilter-persistent save
     docker network create sbsb >/dev/null 2>&1 || true

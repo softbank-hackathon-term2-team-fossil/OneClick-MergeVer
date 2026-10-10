@@ -7,12 +7,15 @@ import { DOCKER_HUB } from "@/lib/deploy/image-ref";
 import { resolveDeployImage, type DeployEvent } from "@/lib/deploy-image";
 import { beginDeployment, completeDeployment, failDeployment } from "@/lib/deployment-history";
 import { requireInstallationId } from "@/lib/session";
+import { readSecretOutput } from "@/lib/terraform";
 
 export const runtime = "nodejs";
 export const maxDuration = 900;
 
 const base = z.object({
   healthPath: z.string().max(200).optional(),
+  // Connect the Cloud SQL database created with Terraform (gcp-db) through DATABASE_URL.
+  database: z.preprocess((value) => value === true || value === "true", z.boolean()).optional(),
 });
 const github = base.extend({
   source: z.literal("github"),
@@ -48,6 +51,13 @@ export async function POST(request: NextRequest): Promise<Response> {
       let cleanup: () => Promise<void> = async () => undefined;
       let recordId: string | undefined;
       try {
+        let appEnv: Record<string, string> | undefined;
+        if (input.database) {
+          const databaseUrl = await readSecretOutput("gcp-db", "database_url");
+          if (!databaseUrl) throw new Error("연결할 Cloud SQL 데이터베이스가 없습니다. 먼저 데이터베이스를 만드세요.");
+          appEnv = { DATABASE_URL: databaseUrl };
+          emit({ phase: "database", message: "Cloud SQL 데이터베이스를 DATABASE_URL로 연결합니다" });
+        }
         const prepared = await resolveDeployImage(request, input, archive, emit);
         cleanup = prepared.cleanup;
         // A repository keeps one Cloud Run service, so each deployment becomes a new revision of it.
@@ -73,6 +83,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             imageRef: `${DOCKER_HUB}/${prepared.image}`,
             containerPort: prepared.containerPort,
             healthPath: input.healthPath?.trim() || "/",
+            env: appEnv,
           },
           (message) => emit({ phase: "log", message }),
         );

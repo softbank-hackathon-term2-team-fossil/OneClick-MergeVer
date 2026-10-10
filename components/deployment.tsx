@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { FailureAnalysisPanel } from "@/components/failure-analysis";
-import { TerraformPanel } from "@/components/terraform-panel";
+import { OciExistingPanel } from "@/components/oci-existing";
+import { CloudSqlPanel, TerraformPanel } from "@/components/terraform-panel";
 import type { ImageVersion } from "@/lib/types";
 
 type Instance = { id: string; name: string; state: string; publicAddress: string | null };
@@ -32,6 +33,8 @@ export function Deployment({ repository, branch, onDeployed }: Props) {
   const [cloudError, setCloudError] = useState("");
   const [containerPort, setContainerPort] = useState<number | "">("");
   const [healthPath, setHealthPath] = useState("/");
+  const [attachDatabase, setAttachDatabase] = useState(false);
+  const [ociMode, setOciMode] = useState<"existing" | "new">("existing");
   const [events, setEvents] = useState<Event[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -126,6 +129,7 @@ export function Deployment({ repository, branch, onDeployed }: Props) {
         form.set("source", "zip");
         if (serverless) {
           form.set("healthPath", healthPath);
+          form.set("database", String(attachDatabase));
         } else {
           form.set("region", region);
           if (provider === "azure" && target === "new") form.set("vmSize", azureVmSize);
@@ -138,7 +142,7 @@ export function Deployment({ repository, branch, onDeployed }: Props) {
       } else {
         headers["Content-Type"] = "application/json";
         body = JSON.stringify(serverless
-          ? { source: "github", repository, branch, imageTag, containerPort, healthPath }
+          ? { source: "github", repository, branch, imageTag, containerPort, healthPath, database: attachDatabase }
           : { source: "github", repository, branch, imageTag, region, mode: target, instanceId, containerPort, ...(provider === "azure" && target === "new" ? { vmSize: azureVmSize } : {}) });
       }
       const response = await fetch(`/api/${provider}/deploy`, { method: "POST", headers, body });
@@ -268,6 +272,7 @@ export function Deployment({ repository, branch, onDeployed }: Props) {
           <label className="form-label">헬스체크 경로</label>
           <input className="form-input" type="text" value={healthPath} placeholder="/" onChange={(event) => setHealthPath(event.target.value)} />
           <p className="field-note">서버 없이 실행되고 요청에 따라 0~N개로 자동 확장됩니다. 새 버전이 이 경로에 응답하지 않으면 이전 버전으로 트래픽을 되돌립니다. /healthz는 Cloud Run이 가로채므로 쓸 수 없습니다.</p>
+          <CloudSqlPanel attach={attachDatabase} onAttachChange={setAttachDatabase} />
         </div>
       ) : (
       <div className="form-group">
@@ -312,7 +317,20 @@ export function Deployment({ repository, branch, onDeployed }: Props) {
       </div>
 
       {provider === "oci" ? (
-        <TerraformPanel image={source === "github" ? selectedVersion?.image ?? "" : ""} containerPort={containerPort} />
+        <>
+          <div className="form-group">
+            <label className="form-label">OCI 서버</label>
+            <div className="seg-row" role="tablist" aria-label="OCI 서버">
+              <button type="button" role="tab" aria-selected={ociMode === "existing"} className={`seg-btn ${ociMode === "existing" ? "active" : ""}`} onClick={() => setOciMode("existing")}>기존 VM 선택</button>
+              <button type="button" role="tab" aria-selected={ociMode === "new"} className={`seg-btn ${ociMode === "new" ? "active" : ""}`} onClick={() => setOciMode("new")}>새 VM + DB 생성</button>
+            </div>
+          </div>
+          {ociMode === "existing" ? (
+            <OciExistingPanel repository={repository} imageTag={source === "github" ? imageTag : ""} containerPort={containerPort} />
+          ) : (
+            <TerraformPanel image={source === "github" ? selectedVersion?.image ?? "" : ""} containerPort={containerPort} />
+          )}
+        </>
       ) : (
         <>
           <button type="button" className="btn btn-primary" disabled={!canDeploy} onClick={() => void deploy()}>

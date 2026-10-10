@@ -84,3 +84,66 @@ export function TerraformPanel({ image, containerPort }: Props) {
     </div>
   );
 }
+
+type DatabaseProps = { attach: boolean; onAttachChange: (value: boolean) => void };
+
+// Cloud Run has no server to host a database, so Terraform creates a Cloud SQL instance next to it
+// and the deployment passes its address to the service as DATABASE_URL.
+export function CloudSqlPanel({ attach, onAttachChange }: DatabaseProps) {
+  const [busy, setBusy] = useState<Action | null>(null);
+  const [error, setError] = useState("");
+  const [host, setHost] = useState("");
+  const [message, setMessage] = useState("");
+
+  const execute = async (action: Action) => {
+    if (action === "destroy" && !window.confirm("Cloud SQL 데이터베이스와 저장된 데이터를 삭제합니다. 계속할까요?")) return;
+    setBusy(action);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch("/api/terraform", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "gcp-db", action }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `요청 실패 (${response.status})`);
+      if (action === "apply") {
+        setHost(typeof data.outputs?.db_host === "string" ? data.outputs.db_host : "");
+        setMessage("Cloud SQL을 만들었습니다. 배포할 때 DATABASE_URL로 연결됩니다.");
+        onAttachChange(true);
+      } else if (action === "destroy") {
+        setHost("");
+        setMessage("Cloud SQL을 삭제했습니다.");
+        onAttachChange(false);
+      } else {
+        setMessage("계획 확인 완료");
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Terraform 실행에 실패했습니다.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="form-group">
+      <label className="form-label">데이터베이스 (Cloud SQL PostgreSQL)</label>
+      <p className="field-note">Terraform으로 Cloud SQL을 만들고, 배포할 때 <code>DATABASE_URL</code> 환경변수로 연결합니다. 요금이 발생하며 생성에 5~10분이 걸립니다.</p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+        <button type="button" className="btn btn-secondary" disabled={Boolean(busy)} onClick={() => void execute("apply")}>
+          {busy === "apply" ? "Cloud SQL 생성 중…" : "Cloud SQL 만들기"}
+        </button>
+        <button type="button" className="btn btn-secondary" disabled={Boolean(busy)} onClick={() => void execute("destroy")}>
+          {busy === "destroy" ? "삭제 중…" : "삭제"}
+        </button>
+      </div>
+      <label className="field-note" style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
+        <input type="checkbox" checked={attach} onChange={(event) => onAttachChange(event.target.checked)} />
+        이번 배포에 데이터베이스를 연결
+      </label>
+      {message && <p className="field-note" role="status">{message}{host ? ` · ${host}` : ""}</p>}
+      {error && <div className="alert-banner error" style={{ marginTop: 12 }}>⚠️ {error}</div>}
+    </div>
+  );
+}

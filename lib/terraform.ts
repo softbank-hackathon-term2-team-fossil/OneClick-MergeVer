@@ -4,7 +4,9 @@ import { copyFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path";
 import { run } from "@/lib/process";
 
-export type TerraformProvider = "gcp" | "oci";
+// gcp / oci: VM + managed PostgreSQL. gcp-db: Cloud SQL only (Cloud Run connects to it).
+// oci-instances: read-only list of existing VMs.
+export type TerraformProvider = "gcp" | "gcp-db" | "oci" | "oci-instances";
 export type TerraformAction = "plan" | "apply" | "destroy";
 export type TerraformResult = { log: string; outputs: Record<string, unknown> };
 
@@ -13,7 +15,7 @@ const SOURCE_ROOT = join(process.cwd(), "infra", "terraform");
 const STATE_ROOT = join(process.cwd(), ".sbsb-terraform");
 const LOG_LIMIT = 6_000;
 
-let running = false;
+const running = new Set<TerraformProvider>();
 
 function env(name: string): string | undefined {
   return process.env[name]?.trim() || undefined;
@@ -25,31 +27,30 @@ function required(names: string[]): Record<string, string> {
   return Object.fromEntries(names.map((name) => [name, env(name) as string]));
 }
 
-async function variablesFor(provider: TerraformProvider, image: string, port: number): Promise<Record<string, string | number>> {
-  const shared = { container_image: image, container_port: port };
-  if (provider === "gcp") {
-    const values = required(["GCP_PROJECT_ID"]);
-    const region = env("GCP_LOCATION") ?? "us-central1";
-    return {
-      ...shared,
-      project_id: values.GCP_PROJECT_ID,
-      credentials_file: env("GOOGLE_APPLICATION_CREDENTIALS") ?? "",
-      region,
-      zone: `${region}-a`,
-    };
-  }
-  const values = required(["OCI_TENANCY_OCID", "OCI_USER_OCID", "OCI_FINGERPRINT", "OCI_PRIVATE_KEY_PATH", "OCI_REGION", "OCI_SSH_PUBLIC_KEY_FILE"]);
-  const sshPublicKey = (await readFile(values.OCI_SSH_PUBLIC_KEY_FILE, "utf8")).trim();
+function ociAuth(): Record<string, string> {
+  const values = required(["OCI_TENANCY_OCID", "OCI_USER_OCID", "OCI_FINGERPRINT", "OCI_PRIVATE_KEY_PATH", "OCI_REGION"]);
   return {
-    ...shared,
     tenancy_ocid: values.OCI_TENANCY_OCID,
     user_ocid: values.OCI_USER_OCID,
     fingerprint: values.OCI_FINGERPRINT,
     private_key_path: values.OCI_PRIVATE_KEY_PATH,
     region: values.OCI_REGION,
     compartment_ocid: env("OCI_COMPARTMENT_OCID") ?? "",
-    ssh_public_key: sshPublicKey,
   };
+}
+
+async function variablesFor(provider: TerraformProvider, image: string, port: number): Promise<Record<string, string | number>> {
+  if (provider === "oci-instances") return ociAuth();
+  if (provider === "oci") {
+    const { OCI_SSH_PUBLIC_KEY_FILE } = required(["OCI_SSH_PUBLIC_KEY_FILE"]);
+    const sshPublicKey = (await readFile(OCI_SSH_PUBLIC_KEY_FILE, "utf8")).trim();
+    return { ...ociAuth(), ssh_public_key: sshPublicKey, container_image: image, container_port: port };
+  }
+  const values = required(["GCP_PROJECT_ID"]);
+  const region = env("GCP_LOCATION") ?? "us-central1";
+  const base = { project_id: values.GCP_PROJECT_ID, credentials_file: env("GOOGLE_APPLICATION_CREDENTIALS") ?? "", region };
+  if (provider === "gcp-db") return base;
+  return { ...base, zone: `${region}-a`, container_image: image, container_port: port };
 }
 
 async function prepareWorkspace(provider: TerraformProvider, variables: Record<string, string | number>): Promise<string> {
@@ -63,16 +64,18 @@ async function prepareWorkspace(provider: TerraformProvider, variables: Record<s
   return workspace;
 }
 
+const terraformBin = () => env("TERRAFORM_BIN") ?? "terraform";
+
 export async function runTerraform(
   provider: TerraformProvider,
   action: TerraformAction,
-  input: { image: string; port: number },
+  input: { image?: string; port?: number } = {},
 ): Promise<TerraformResult> {
-  if (running) throw new Error("다른 Terraform 작업이 진행 중입니다. 끝난 뒤 다시 시도하세요.");
-  running = true;
+  if (running.has(provider)) throw new Error("같은 대상의 Terraform 작업이 진행 중입니다. 끝난 뒤 다시 시도하세요.");
+  running.add(provider);
   try {
-    const bin = env("TERRAFORM_BIN") ?? "terraform";
-    const workspace = await prepareWorkspace(provider, await variablesFor(provider, input.image, input.port));
+    const bin = terraformBin();
+    const workspace = await prepareWorkspace(provider, await variablesFor(provider, input.image ?? "", input.port ?? 8000));
     const common = ["-input=false", "-no-color"];
     await run(bin, ["init", ...common], { cwd: workspace, timeoutMs: 300_000 });
     const args = action === "plan" ? ["plan", ...common] : [action, "-auto-approve", ...common];
@@ -86,6 +89,16 @@ export async function runTerraform(
     }
     return { log: log.slice(-LOG_LIMIT), outputs };
   } finally {
-    running = false;
+    running.delete(provider);
+  }
+}
+
+// Server-side only: reads a sensitive output (e.g. DATABASE_URL) of an applied workspace.
+export async function readSecretOutput(provider: TerraformProvider, name: string): Promise<string | null> {
+  try {
+    const value = await run(terraformBin(), ["output", "-raw", name, "-no-color"], { cwd: join(STATE_ROOT, provider), timeoutMs: 60_000 });
+    return value || null;
+  } catch {
+    return null;
   }
 }
