@@ -22,7 +22,7 @@ export type SavedDeploymentTarget = Omit<DeploymentConnection, "password" | "pri
   updatedAt: string;
 };
 
-type EncryptedValue = {
+export type EncryptedValue = {
   iv: string;
   tag: string;
   data: string;
@@ -40,13 +40,13 @@ function encryptionKey(): Buffer {
   return createHash("sha256").update(secret).digest();
 }
 
-function recordId(installationId: number, repository: string): string {
+export function recordId(installationId: number, repository: string): string {
   return createHash("sha256")
     .update(`${installationId}:${repository.toLowerCase()}`)
     .digest("hex");
 }
 
-function encrypt(value: object): EncryptedValue {
+export function encrypt(value: object): EncryptedValue {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
   const data = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
@@ -57,7 +57,7 @@ function encrypt(value: object): EncryptedValue {
   };
 }
 
-function decrypt<T>(value: EncryptedValue): T {
+export function decrypt<T>(value: EncryptedValue): T {
   const decipher = createDecipheriv(
     "aes-256-gcm",
     encryptionKey(),

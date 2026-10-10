@@ -2,6 +2,7 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { Client, type ConnectConfig } from "ssh2";
+import { dockerEnvFlags, type AppEnv } from "@/lib/app-env";
 
 type DeploymentInput = {
   host: string;
@@ -15,6 +16,8 @@ type DeploymentInput = {
   registry: string;
   registryUsername: string;
   registryPassword: string;
+  // Application environment variables passed to the app container (never logged).
+  env?: AppEnv;
 };
 
 export type ConnectionTestInput = {
@@ -172,7 +175,7 @@ fi
 
 echo "Starting candidate container ($CANDIDATE) alongside existing version..."
 docker rm -f "$CANDIDATE" >/dev/null 2>&1 || true
-docker run -d --name "$CANDIDATE" --network ${shellQuote(netName)} --restart unless-stopped ${shellQuote(input.image)}
+docker run -d --name "$CANDIDATE" --network ${shellQuote(netName)} --restart unless-stopped ${dockerEnvFlags(input.env)} ${shellQuote(input.image)}
 
 echo "Checking health of new container ($CANDIDATE)..."
 READY=0

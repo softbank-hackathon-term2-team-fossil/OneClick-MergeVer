@@ -1,6 +1,7 @@
 import "server-only";
 
 import { aws, run } from "@/lib/process";
+import { dockerEnvFlags, type AppEnv } from "@/lib/app-env";
 import { awsAccountId, awsDockerHubTokenParameter, dockerHubPullUsername } from "@/lib/cloud-config";
 
 export const DEFAULT_REGION = "ap-northeast-2";
@@ -87,7 +88,7 @@ export async function resolveTarget(region: string, target: Target): Promise<Ins
 
 // The shell script the instance runs. It reads the Docker Hub token from Parameter Store with the
 // instance role, so the token is not part of the command text that SSM stores in its history.
-export function instanceCommands(region: string, image: string, containerPort: number, tokenParameter: string, username: string): string[] {
+export function instanceCommands(region: string, image: string, containerPort: number, tokenParameter: string, username: string, env?: AppEnv): string[] {
   if (!/^[a-z0-9][a-z0-9./:_-]+$/.test(image)) throw new Error("올바르지 않은 이미지 주소입니다.");
   if (!Number.isInteger(containerPort) || containerPort < 1 || containerPort > 65535) throw new Error("올바른 컨테이너 포트를 입력하세요.");
   return [
@@ -100,12 +101,12 @@ export function instanceCommands(region: string, image: string, containerPort: n
     `aws ssm get-parameter --name '${tokenParameter}' --with-decryption --query Parameter.Value --output text --region ${region} | docker --config "$DOCKER_CONFIG" login --username '${username}' --password-stdin`,
     `docker --config "$DOCKER_CONFIG" pull ${image}`,
     "docker rm -f sbsb-app || true",
-    `docker run -d --restart unless-stopped --name sbsb-app -p 80:${containerPort} ${image}`,
+    `docker run -d --restart unless-stopped --name sbsb-app -p 80:${containerPort} ${dockerEnvFlags(env)} ${image}`,
     "docker ps --filter name=sbsb-app --format '{{.Status}}'",
   ];
 }
 
-export async function deployToInstance(region: string, instance: Instance, image: string, containerPort: number): Promise<string> {
+export async function deployToInstance(region: string, instance: Instance, image: string, containerPort: number, env?: AppEnv): Promise<string> {
   if (!instance.PublicIpAddress && !instance.PublicDnsName) throw new Error("EC2에 공인 IP 또는 DNS가 없습니다. 공개 URL을 표시할 수 없습니다.");
   const instanceId = instance.InstanceId;
   for (let attempt = 0; attempt < 40; attempt++) {
@@ -114,7 +115,7 @@ export async function deployToInstance(region: string, instance: Instance, image
     if (attempt === 39) throw new Error("EC2가 Systems Manager에 연결되지 않았습니다. SSM Agent와 인스턴스 역할을 확인하세요.");
     await new Promise((resolve) => setTimeout(resolve, 5000));
   }
-  const commands = instanceCommands(region, image, containerPort, awsDockerHubTokenParameter(), dockerHubPullUsername());
+  const commands = instanceCommands(region, image, containerPort, awsDockerHubTokenParameter(), dockerHubPullUsername(), env);
   const sent = await aws<{ Command: { CommandId: string } }>(region, "ssm", "send-command", [
     "--instance-ids", instanceId, "--document-name", "AWS-RunShellScript",
     "--comment", "Deploy SBSB container", "--parameters", JSON.stringify({ commands }),

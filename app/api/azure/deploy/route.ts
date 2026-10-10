@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { azureAccount, deployAzureVm, resolveAzureVm } from "@/lib/azure-deploy";
+import { getAppEnv } from "@/lib/env-store";
 import { resolveDeployImage, type DeployEvent } from "@/lib/deploy-image";
 import { beginDeployment, completeDeployment, failDeployment } from "@/lib/deployment-history";
 import { requireInstallationId } from "@/lib/session";
@@ -62,7 +63,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         const target = { ...input, containerPort: prepared.containerPort };
         const vm = await resolveAzureVm(target);
         emit({ phase: "deploy", message: `Azure VM ${vm.name}이 Docker Hub에서 이미지를 받아 실행하는 중`, instanceId: vm.name });
-        const url = await deployAzureVm(target, vm, prepared.image);
+        const appEnv = input.source === "github" ? await getAppEnv(requireInstallationId(request), input.repository) : undefined;
+        const url = await deployAzureVm(target, vm, prepared.image, appEnv);
         if (recordId) await completeDeployment(recordId, { url, destination: vm.name });
         emit({ phase: "complete", message: "Azure 배포가 완료되었습니다.", instanceId: vm.name, url });
       } catch (error) {
