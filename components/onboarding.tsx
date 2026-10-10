@@ -13,6 +13,7 @@ import type {
 import { Deployment } from "@/components/deployment";
 import { DeploymentHistory } from "@/components/deployment-history";
 import { FailureAnalysisPanel } from "@/components/failure-analysis";
+import { PrMergeConfirm } from "@/components/pr-merge";
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -816,12 +817,20 @@ export function Onboarding() {
                           ✓ PR #{pullRequest.number} 생성 및 <code>{branch || "main"}</code> 브랜치 자동 머지 완료! (수동 승인 불필요)
                         </span>
                       ) : pullRequest && !pullRequest.merged ? (
-                        <span style={{ color: "#d9480f" }}>
-                          PR #{pullRequest.number} 생성 완료 (저장소 보호 규칙으로 인해 수동 머지가 필요합니다:{" "}
-                          <a href={pullRequest.htmlUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "underline", fontWeight: 700 }}>
-                            GitHub에서 머지하기 ↗
-                          </a>)
-                        </span>
+                        <>
+                          <span style={{ color: "#d9480f" }}>
+                            PR #{pullRequest.number} 생성 완료 (머지 전 확인이 필요합니다. GitHub에서 직접 머지하려면{" "}
+                            <a href={pullRequest.htmlUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "underline", fontWeight: 700 }}>
+                              여기 ↗
+                            </a>)
+                          </span>
+                          <PrMergeConfirm
+                            repository={repository}
+                            pullNumber={pullRequest.number}
+                            htmlUrl={pullRequest.htmlUrl}
+                            onMerged={() => setPullRequest((current) => (current ? { ...current, merged: true } : current))}
+                          />
+                        </>
                       ) : pipelineStep === "merging" ? (
                         "GitHub Actions 워크플로우 커밋 후 main 브랜치로 자동 머지하고 있습니다…"
                       ) : (
