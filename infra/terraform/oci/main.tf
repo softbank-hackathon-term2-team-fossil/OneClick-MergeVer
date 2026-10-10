@@ -55,7 +55,7 @@ resource "oci_core_security_list" "main" {
   }
 
   dynamic "ingress_security_rules" {
-    for_each = [22, 80, 5432]
+    for_each = [22, 80, 443, 5432]
 
     content {
       protocol = "6"
@@ -177,6 +177,7 @@ locals {
     # Lets SBSB deploy over SSH as the default user without sudo.
     usermod -aG docker ubuntu
     iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+    iptables -I INPUT -p tcp --dport 443 -j ACCEPT
     netfilter-persistent save
     docker network create sbsb >/dev/null 2>&1 || true
     ${local.db_container_script}
