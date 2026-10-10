@@ -28,10 +28,10 @@ export type MonitorSnapshot = {
 // that was serving the failing deployment.
 export function isSameServer(destination: string | null | undefined, host: string, hostPort: number): boolean {
   if (!destination) return false;
-  const normalize = (value: string) => value.trim().toLowerCase().replace(/^[|]$/g, "");
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
   const index = destination.lastIndexOf(":");
   if (index <= 0) return false;
-  const destinationHost = normalize(destination.slice(0, index).replace(/^[|]$/g, ""));
+  const destinationHost = normalize(destination.slice(0, index));
   const destinationPort = Number(destination.slice(index + 1));
   return destinationHost === normalize(host) && destinationPort === hostPort;
 }
