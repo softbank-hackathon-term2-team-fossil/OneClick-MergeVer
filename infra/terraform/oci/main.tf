@@ -111,24 +111,48 @@ resource "oci_core_instance" "app" {
 
   metadata = {
     ssh_authorized_keys = var.ssh_public_key
-    user_data = base64encode(var.container_image == "" ? "#!/bin/bash\nexit 0\n" : <<-SCRIPT
-      #!/bin/bash
-      set -eu
-      apt-get update -y
-      apt-get install -y docker.io iptables-persistent
-      systemctl enable --now docker
-      iptables -I INPUT -p tcp --dport 80 -j ACCEPT
-      netfilter-persistent save
-      docker rm -f sbsb-app >/dev/null 2>&1 || true
-      docker run -d --restart unless-stopped --name sbsb-app -p 80:${var.container_port} \
-        -e DATABASE_URL='postgresql://app:${random_password.db.result}@${oci_psql_db_system.db.network_details[0].primary_db_endpoint_private_ip}:5432/postgres' \
-        ${var.container_image}
-    SCRIPT
-    )
+    user_data           = base64encode(local.startup_script)
   }
 }
 
+locals {
+  managed      = var.db_mode == "managed"
+  db_host      = local.managed ? oci_psql_db_system.db[0].network_details[0].primary_db_endpoint_private_ip : "sbsb-db"
+  database_url = "postgresql://app:${random_password.db.result}@${local.db_host}:5432/${local.managed ? "postgres" : "app"}"
+
+  db_container_script = local.managed ? "" : <<-SCRIPT
+    docker rm -f sbsb-db >/dev/null 2>&1 || true
+    docker run -d --restart unless-stopped --name sbsb-db --network sbsb \
+      -v sbsb-db-data:/var/lib/postgresql/data \
+      -e POSTGRES_USER=app -e POSTGRES_PASSWORD='${random_password.db.result}' -e POSTGRES_DB=app \
+      postgres:16-alpine
+  SCRIPT
+
+  app_container_script = var.container_image == "" ? "" : <<-SCRIPT
+    docker rm -f sbsb-app >/dev/null 2>&1 || true
+    docker run -d --restart unless-stopped --name sbsb-app --network sbsb -p 80:${var.container_port} \
+      -e DATABASE_URL='${local.database_url}' \
+      ${var.container_image}
+  SCRIPT
+
+  startup_script = <<-SCRIPT
+    #!/bin/bash
+    set -eu
+    apt-get update -y
+    apt-get install -y docker.io iptables-persistent
+    systemctl enable --now docker
+    iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+    netfilter-persistent save
+    docker network create sbsb >/dev/null 2>&1 || true
+    ${local.db_container_script}
+    ${local.app_container_script}
+  SCRIPT
+}
+
+# Managed PostgreSQL needs the dbsystem-count service limit; db_mode = "container" runs
+# PostgreSQL as a container on the VM instead.
 resource "oci_psql_db_system" "db" {
+  count                       = local.managed ? 1 : 0
   compartment_id              = local.compartment_id
   display_name                = "${local.name}-pg"
   db_version                  = var.db_version

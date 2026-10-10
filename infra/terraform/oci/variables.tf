@@ -65,6 +65,17 @@ variable "allowed_cidr" {
   default = "0.0.0.0/0"
 }
 
+variable "db_mode" {
+  type        = string
+  default     = "container"
+  description = "managed = OCI Database with PostgreSQL (needs the dbsystem-count service limit), container = PostgreSQL container on the VM."
+
+  validation {
+    condition     = contains(["managed", "container"], var.db_mode)
+    error_message = "db_mode must be managed or container."
+  }
+}
+
 variable "db_version" {
   type    = string
   default = "16"

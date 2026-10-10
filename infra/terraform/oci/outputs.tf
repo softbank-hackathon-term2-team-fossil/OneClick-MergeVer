@@ -6,11 +6,15 @@ output "app_url" {
   value = "http://${oci_core_instance.app.public_ip}/"
 }
 
-output "db_endpoint_private_ip" {
-  value = oci_psql_db_system.db.network_details[0].primary_db_endpoint_private_ip
+output "db_mode" {
+  value = var.db_mode
+}
+
+output "db_host" {
+  value = local.db_host
 }
 
 output "database_url" {
-  value     = "postgresql://app:${random_password.db.result}@${oci_psql_db_system.db.network_details[0].primary_db_endpoint_private_ip}:5432/postgres"
+  value     = local.database_url
   sensitive = true
 }
