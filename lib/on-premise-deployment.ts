@@ -175,7 +175,7 @@ fi
 
 echo "Starting candidate container ($CANDIDATE) alongside existing version..."
 docker rm -f "$CANDIDATE" >/dev/null 2>&1 || true
-docker run -d --name "$CANDIDATE" --network ${shellQuote(netName)} --restart unless-stopped ${dockerEnvFlags(input.env)} ${shellQuote(input.image)}
+docker run -d --name "$CANDIDATE" --network ${shellQuote(netName)} --restart unless-stopped ${dockerEnvFlags(input.env)}${shellQuote(input.image)}
 
 echo "Checking health of new container ($CANDIDATE)..."
 READY=0

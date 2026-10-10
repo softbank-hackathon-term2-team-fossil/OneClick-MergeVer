@@ -12,6 +12,7 @@ import type {
 } from "@/lib/types";
 import { Deployment } from "@/components/deployment";
 import { DeploymentHistory } from "@/components/deployment-history";
+import { EnvVars } from "@/components/env-vars";
 import { FailureAnalysisPanel } from "@/components/failure-analysis";
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -1552,6 +1553,7 @@ export function Onboarding() {
             </div>
           )}
 
+          {repository && <EnvVars repository={repository} />}
           <DeploymentHistory records={history} busy={Boolean(busy)} onRollback={rollback} />
         </>
       )}

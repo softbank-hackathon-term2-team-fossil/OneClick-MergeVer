@@ -44,9 +44,10 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
-// "-e 'NAME=value' ..." for docker run. Every value is single-quoted, so it cannot break out of the command.
+// "-e 'NAME=value' " (with a trailing space) for docker run, or "" without variables.
+// Every value is single-quoted, so it cannot break out of the command.
 export function dockerEnvFlags(env: AppEnv | undefined): string {
   return Object.entries(validateAppEnv(env ?? {}))
-    .map(([name, value]) => `-e ${shellQuote(`${name}=${value}`)}`)
-    .join(" ");
+    .map(([name, value]) => `-e ${shellQuote(`${name}=${value}`)} `)
+    .join("");
 }

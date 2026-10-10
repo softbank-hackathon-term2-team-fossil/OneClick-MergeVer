@@ -101,7 +101,7 @@ export function instanceCommands(region: string, image: string, containerPort: n
     `aws ssm get-parameter --name '${tokenParameter}' --with-decryption --query Parameter.Value --output text --region ${region} | docker --config "$DOCKER_CONFIG" login --username '${username}' --password-stdin`,
     `docker --config "$DOCKER_CONFIG" pull ${image}`,
     "docker rm -f sbsb-app || true",
-    `docker run -d --restart unless-stopped --name sbsb-app -p 80:${containerPort} ${dockerEnvFlags(env)} ${image}`,
+    `docker run -d --restart unless-stopped --name sbsb-app -p 80:${containerPort} ${dockerEnvFlags(env)}${image}`,
     "docker ps --filter name=sbsb-app --format '{{.Status}}'",
   ];
 }

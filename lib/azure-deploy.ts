@@ -178,7 +178,7 @@ for attempt in $(seq 1 18); do
 done
 docker --config "$DOCKER_CONFIG" pull ${image} >/dev/null
 docker rm -f sbsb-app >/dev/null 2>&1 || true
-docker run -d --restart unless-stopped --name sbsb-app -p 80:${containerPort} ${dockerEnvFlags(env)} ${image} >/dev/null
+docker run -d --restart unless-stopped --name sbsb-app -p 80:${containerPort} ${dockerEnvFlags(env)}${image} >/dev/null
 for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
   status=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:80/ || true)
   if [[ "$status" =~ ^[1-4][0-9][0-9]$ ]]; then echo SBSB_DEPLOY_OK; exit 0; fi
