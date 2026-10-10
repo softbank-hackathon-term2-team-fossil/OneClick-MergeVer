@@ -1055,11 +1055,11 @@ export function Onboarding() {
                         fontWeight: 800,
                       }}>1</span>
                       <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)" }}>
-                        서버 터미널에 인증키 등록
+                        서버 원클릭 초기 설정 (인증키 등록 + Docker 자동 설치)
                       </span>
                     </div>
 
-                    {/* SSH 공개키 원클릭 복사 카드 */}
+                    {/* SSH 공개키 + Docker 원클릭 복사 카드 */}
                     <div
                       onClick={() => void copySetupCommand()}
                       style={{
@@ -1091,11 +1091,11 @@ export function Onboarding() {
                             transition: "background 0.2s ease",
                           }}
                         >
-                          {copiedCommand ? "✓" : "🔑"}
+                          {copiedCommand ? "✓" : "🚀"}
                         </div>
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)" }}>
-                            {copiedCommand ? "명령어가 클립보드에 복사되었습니다!" : "등록 명령어 복사하기"}
+                            {copiedCommand ? "원클릭 설정 명령어가 복사되었습니다!" : "원클릭 설정 명령어 복사하기"}
                           </div>
                           <div
                             style={{
@@ -1108,7 +1108,7 @@ export function Onboarding() {
                               marginTop: "2px",
                             }}
                           >
-                            $ mkdir -p ~/.ssh && echo &quot;ssh-rsa AAA...&quot; &gt;&gt; ~/.ssh/authorized_keys
+                            $ mkdir -p ~/.ssh && echo &quot;ssh-rsa...&quot; &gt;&gt; authorized_keys && install docker...
                           </div>
                         </div>
                       </div>
@@ -1128,7 +1128,7 @@ export function Onboarding() {
                       </button>
                     </div>
                     <p style={{ fontSize: "11px", color: "var(--text-sub)", margin: "6px 0 0 4px" }}>
-                      * 복사한 명령어를 배포 대상 서버 터미널에 1회 실행하면 공개키가 <code>~/.ssh/authorized_keys</code>에 자동 등록됩니다.
+                      * 복사한 명령어를 배포 대상 서버 터미널에 1회 실행하면 SSH 인증키 등록과 Docker 설치 및 권한 설정이 한 번에 완료됩니다.
                     </p>
                   </div>
 

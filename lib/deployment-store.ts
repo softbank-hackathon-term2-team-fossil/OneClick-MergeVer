@@ -5,7 +5,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { db } from "@/lib/db";
 import { ensureProject, findProject } from "@/lib/projects";
-import { generateSshKeyPair } from "./ssh-keygen";
+import { formatSetupCommand, generateSshKeyPair } from "./ssh-keygen";
 
 export type DeploymentConnection = {
   host: string;
@@ -242,7 +242,7 @@ export async function getOrCreateRepositorySshKey(
     const credential = decrypt<{ privateKey: string }>(store[id].credential);
     return {
       publicKey: store[id].publicKey,
-      setupCommand: store[id].setupCommand,
+      setupCommand: formatSetupCommand(store[id].publicKey),
       privateKey: credential.privateKey,
     };
   }
