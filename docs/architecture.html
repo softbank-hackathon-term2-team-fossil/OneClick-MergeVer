@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>SBSB Architecture</title>
+<style>
+  :root {
+    --ink: #14171f; --sub: #5b6474; --line: #c9cfdb; --paper: #ffffff; --panel: #f5f7fb;
+    --image: #1d4ed8; --image-soft: #e8efff; --control: #c2410c; --control-soft: #fff1e6;
+    --data: #0f766e; --data-soft: #e3f5f2;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    width: 1920px; height: 1080px; position: relative; overflow: hidden; background: var(--paper); color: var(--ink);
+    font-family: -apple-system, "Apple SD Gothic Neo", "Hiragino Sans", "Noto Sans KR", "Noto Sans JP", sans-serif;
+  }
+  .box { position: absolute; border: 2px solid var(--line); border-radius: 16px; background: var(--paper); padding: 16px 20px; }
+  .ko { font-weight: 700; font-size: 25px; line-height: 1.25; letter-spacing: -0.01em; }
+  .ja { font-size: 16px; color: var(--sub); line-height: 1.35; margin-top: 2px; }
+  .note { font-size: 16px; line-height: 1.45; margin-top: 8px; }
+  .note span { color: var(--sub); font-size: 14px; }
+  h1 { position: absolute; left: 60px; top: 30px; margin: 0; font-size: 38px; letter-spacing: -0.02em; }
+  h1 small { font-size: 22px; font-weight: 500; color: var(--sub); margin-left: 14px; }
+  .tagline { position: absolute; right: 60px; top: 38px; font-size: 20px; color: var(--sub); text-align: right; line-height: 1.4; }
+  .tagline b { color: var(--ink); }
+
+  .hub { border-color: var(--image); background: var(--image-soft); }
+  .hub .ko { color: var(--image); font-size: 28px; }
+  .platform { border-color: var(--control); background: var(--control-soft); padding: 18px 22px; }
+  .platform > .ko { color: var(--control); font-size: 28px; }
+  .chips { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 16px; }
+  .chip { background: var(--paper); border: 1.5px solid #f3c9a5; border-radius: 12px; padding: 11px 14px; }
+  .chip .ko { font-size: 19px; }
+  .chip .ja { font-size: 14px; }
+  .principle { margin-top: 14px; font-size: 15.5px; font-weight: 600; line-height: 1.45; }
+  .principle span { display: block; font-weight: 400; font-size: 13.5px; color: var(--sub); }
+  .store { border-color: var(--data); background: var(--data-soft); }
+  .store .ko { color: var(--data); font-size: 22px; }
+  .target { padding: 13px 18px; }
+  .target .ko { font-size: 23px; }
+  .target .note { margin-top: 5px; font-size: 15.5px; }
+  .pill { display: inline-block; font-size: 13px; font-weight: 700; border-radius: 999px; padding: 2px 10px; margin-left: 8px; vertical-align: 3px; }
+  .pill.vm { background: #eceff5; color: var(--sub); }
+  .pill.sl { background: var(--image-soft); color: var(--image); }
+
+  .label { position: absolute; font-size: 15px; font-weight: 700; line-height: 1.3; background: var(--paper); padding: 1px 6px; border-radius: 6px; white-space: nowrap; }
+  .label small { display: block; font-weight: 500; font-size: 13px; color: var(--sub); }
+  .label.img { color: var(--image); }
+  .label.ctl { color: var(--control); }
+  .legend { position: absolute; left: 640px; top: 44px; font-size: 15px; color: var(--sub); display: flex; gap: 28px; align-items: center; }
+  .legend i { display: inline-block; width: 44px; height: 0; border-top: 3px solid; vertical-align: middle; margin-right: 8px; }
+  .legend .i1 { border-color: var(--image); }
+  .legend .i2 { border-color: var(--control); border-top-style: dashed; }
+  svg { position: absolute; left: 0; top: 0; }
+</style>
+</head>
+<body>
+  <h1>SBSB 아키텍처 <small>SBSB アーキテクチャ</small></h1>
+  <div class="tagline"><b>이미지는 하나, 배포 대상은 넷</b><br>イメージは1つ、デプロイ先は4つ</div>
+
+  <!-- 화살표 -->
+  <svg width="1920" height="1080" viewBox="0 0 1920 1080" fill="none">
+    <defs>
+      <marker id="aImg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#1d4ed8"/></marker>
+      <marker id="aCtl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#c2410c"/></marker>
+      <marker id="aDat" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#0f766e"/></marker>
+    </defs>
+    <g stroke="#1d4ed8" stroke-width="3.5" marker-end="url(#aImg)">
+      <!-- 개발자 → GitHub -->
+      <path d="M300 215 H372"/>
+      <!-- GitHub → Docker Hub -->
+      <path d="M760 215 H852"/>
+      <!-- Docker Hub → 대상 4곳 (이미지 pull) -->
+      <path d="M1180 215 H1232 V160 H1292"/>
+      <path d="M1232 215 V372 H1292"/>
+      <path d="M1232 372 V562 H1292"/>
+      <path d="M1232 562 V752 H1292"/>
+      <!-- ZIP → SBSB -->
+      <path d="M300 545 H372"/>
+      <!-- SBSB → Docker Hub (ZIP 빌드 이미지) -->
+      <path d="M1040 440 V328"/>
+    </g>
+    <g stroke="#c2410c" stroke-width="3" stroke-dasharray="9 7" marker-end="url(#aCtl)">
+      <!-- SBSB → GitHub (설정 PR) -->
+      <path d="M560 440 V338"/>
+      <!-- SBSB → 대상 4곳 (배포 지시) -->
+      <path d="M1180 660 H1262 V262 H1292"/>
+      <path d="M1262 660 V452 H1292"/>
+      <path d="M1262 660 V642 H1292"/>
+      <path d="M1262 660 V862 H1292"/>
+    </g>
+    <g stroke="#0f766e" stroke-width="3" marker-end="url(#aDat)" marker-start="url(#aDat)">
+      <path d="M570 900 V938"/>
+      <path d="M990 900 V938"/>
+    </g>
+  </svg>
+
+  <!-- 1열: 입력 -->
+  <div class="box" style="left:60px; top:150px; width:240px; height:130px;">
+    <div class="ko">개발자</div><div class="ja">開発者</div>
+    <div class="note">코드 푸시<br><span>コードをプッシュ</span></div>
+  </div>
+  <div class="box" style="left:60px; top:480px; width:240px; height:130px;">
+    <div class="ko">ZIP 업로드</div><div class="ja">ZIPアップロード</div>
+    <div class="note">저장소 없이 배포<br><span>リポジトリなしでデプロイ</span></div>
+  </div>
+
+  <!-- 2열: GitHub -->
+  <div class="box" style="left:380px; top:120px; width:380px; height:210px;">
+    <div class="ko">GitHub 저장소</div><div class="ja">GitHub リポジトリ（GitHub App 連携）</div>
+    <div class="note" style="background:var(--panel); border-radius:10px; padding:10px 12px; margin-top:12px;">
+      <b>GitHub Actions 빌드</b> <span>ビルド</span><br>
+      푸시마다 멀티 아키텍처 이미지 생성<br><span>プッシュごとにマルチアーキテクチャのイメージを作成</span>
+    </div>
+  </div>
+
+  <!-- 3열: Docker Hub -->
+  <div class="box hub" style="left:860px; top:120px; width:320px; height:200px;">
+    <div class="ko">Docker Hub</div><div class="ja">単一のイメージレジストリ</div>
+    <div class="note">단일 이미지 레지스트리 (비공개)<br>태그 = 커밋 SHA<br><span>非公開・タグ＝コミットSHA</span></div>
+  </div>
+
+  <!-- SBSB 플랫폼 -->
+  <div class="box platform" style="left:380px; top:448px; width:800px; height:452px;">
+    <div class="ko">SBSB 배포 플랫폼 <span style="font-size:18px; font-weight:500; color:var(--sub)">Next.js</span></div>
+    <div class="ja">SBSB デプロイプラットフォーム</div>
+    <div class="chips">
+      <div class="chip"><div class="ko">저장소 분석</div><div class="ja">リポジトリ解析</div><div class="note" style="font-size:14px">빌드 파일만 읽음<br><span>ビルド関連ファイルのみ</span></div></div>
+      <div class="chip"><div class="ko">AI Dockerfile 생성</div><div class="ja">AI で Dockerfile 生成</div><div class="note" style="font-size:14px">생성 후 검증<br><span>生成後に検証</span></div></div>
+      <div class="chip"><div class="ko">설정 PR 작성</div><div class="ja">設定PRを作成</div><div class="note" style="font-size:14px">Dockerfile + 워크플로<br><span>＋ワークフロー</span></div></div>
+      <div class="chip"><div class="ko">배포 제어</div><div class="ja">デプロイ制御</div><div class="note" style="font-size:14px">대상별 어댑터, 동시 배포 차단<br><span>ターゲット別・同時実行を防止</span></div></div>
+      <div class="chip"><div class="ko">배포 이력 · 롤백</div><div class="ja">デプロイ履歴・ロールバック</div><div class="note" style="font-size:14px">이전 커밋으로 원클릭 복원<br><span>以前のコミットへワンクリック</span></div></div>
+      <div class="chip"><div class="ko">AI 실패 분석</div><div class="ja">AI による失敗分析</div><div class="note" style="font-size:14px">빌드·배포 로그의 원인과 조치<br><span>ビルド／デプロイログの原因と対処</span></div></div>
+    </div>
+    <div class="principle">AI는 Dockerfile 생성과 분석까지만 맡고, 빌드 워크플로와 배포 절차는 검증된 고정 템플릿으로 실행
+      <span>AI は Dockerfile 生成と分析まで。ビルドワークフローとデプロイ手順は検証済みの固定テンプレートで実行</span></div>
+  </div>
+
+  <!-- 저장소 -->
+  <div class="box store" style="left:380px; top:946px; width:380px; height:104px; padding:12px 18px;">
+    <div class="ko">PostgreSQL <span style="font-size:15px; font-weight:500; color:var(--sub)">Prisma</span></div>
+    <div class="note" style="margin-top:3px; font-size:15px">프로젝트 · 서버(암호화) · 배포 이력<br><span>プロジェクト・サーバー（暗号化）・デプロイ履歴</span></div>
+  </div>
+  <div class="box store" style="left:800px; top:946px; width:380px; height:104px; padding:12px 18px;">
+    <div class="ko">LLM <span style="font-size:15px; font-weight:500; color:var(--sub)">OpenAI / Gemini</span></div>
+    <div class="note" style="margin-top:3px; font-size:15px">Dockerfile 생성 · 실패 분석<br><span>Dockerfile 生成・失敗分析</span></div>
+  </div>
+
+  <!-- 4열: 배포 대상 -->
+  <div class="box target" style="left:1300px; top:112px; width:560px; height:176px;">
+    <div class="ko">온프레미스 서버 <span class="pill vm">SSH</span></div><div class="ja">オンプレミスサーバー</div>
+    <div class="note">nginx blue/green 무중단 교체 · Cloudflare Tunnel 공개 URL<br><span>nginx による無停止切り替え・Cloudflare Tunnel で公開URL</span></div>
+  </div>
+  <div class="box target" style="left:1300px; top:308px; width:560px; height:170px;">
+    <div class="ko">AWS EC2 <span class="pill vm">SSM Run Command</span></div><div class="ja">AWS EC2（VM）</div>
+    <div class="note">토큰은 Parameter Store에서 인스턴스 역할로 읽음<br><span>トークンは Parameter Store からインスタンスロールで取得</span></div>
+  </div>
+  <div class="box target" style="left:1300px; top:498px; width:560px; height:170px;">
+    <div class="ko">Azure VM <span class="pill vm">Run Command</span></div><div class="ja">Azure VM</div>
+    <div class="note">토큰은 Key Vault에서 관리 ID로 읽음<br><span>トークンは Key Vault からマネージドIDで取得</span></div>
+  </div>
+  <div class="box target" style="left:1300px; top:688px; width:560px; height:206px;">
+    <div class="ko">Google Cloud Run <span class="pill sl">서버리스 · サーバーレス</span></div><div class="ja">Google Cloud Run</div>
+    <div class="note">0~N 자동 확장 · HTTPS 주소 자동 · 실패 시 이전 리비전 복원<br><span>0〜Nの自動スケール・HTTPS URL 自動発行・失敗時は前リビジョンへ</span><br>Artifact Registry 원격 저장소 경유 <span>リモートリポジトリ経由</span></div>
+  </div>
+
+  <!-- 화살표 라벨 -->
+  <div class="label img" style="left:306px; top:176px;">git push</div>
+  <div class="label img" style="left:770px; top:168px;">이미지 push<small>イメージ push</small></div>
+  <div class="label img" style="left:1196px; top:120px; white-space:normal; width:92px; text-align:center;">pull</div>
+  <div class="label ctl" style="left:428px; top:366px;">설정 PR<small>設定PR</small></div>
+  <div class="label img" style="left:1052px; top:362px;">ZIP 빌드 이미지 push<small>ZIPビルドのイメージ push</small></div>
+  <div class="label ctl" style="left:1190px; top:874px;">배포 지시<small>デプロイ指示</small></div>
+
+  <div class="box" style="left:1300px; top:914px; width:560px; height:136px; background:var(--panel); border-style:dashed; padding:12px 18px;">
+    <div class="ko" style="font-size:19px">외부 레지스트리의 토큰은 각 클라우드의 비밀 저장소에</div>
+    <div class="ja" style="font-size:15px">外部レジストリのトークンは各クラウドのシークレットストアに保管</div>
+    <div class="note" style="font-size:14.5px; margin-top:6px">클라우드 안의 것이 자기 신원으로 읽으므로, 원격 명령과 그 기록에 토큰이 남지 않음<br><span>クラウド側が自身のIDで読み取るため、リモートコマンドとその履歴にトークンが残らない</span></div>
+  </div>
+
+  <div class="legend">
+    <span><i class="i1"></i>이미지·코드의 흐름 / イメージ・コードの流れ</span>
+    <span><i class="i2"></i>제어 (PR, 배포 지시) / 制御（PR・デプロイ指示）</span>
+  </div>
+</body>
+</html>
