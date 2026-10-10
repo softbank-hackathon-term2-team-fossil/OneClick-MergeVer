@@ -22,6 +22,7 @@ import {
   dockerHubTag,
 } from "@/lib/dockerhub";
 import { getInstallationClient, parseRepository } from "@/lib/github";
+import { getAppEnv } from "@/lib/env-store";
 import { deployToOnPremise, testSshConnection } from "@/lib/on-premise-deployment";
 import { requireInstallationId } from "@/lib/session";
 
@@ -153,6 +154,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         registry: credential.registry,
         registryUsername: credential.username,
         registryPassword: credential.password,
+        env: await getAppEnv(installationId, body.repository),
       }));
     } catch (error) {
       await failDeployment(record.id, error);

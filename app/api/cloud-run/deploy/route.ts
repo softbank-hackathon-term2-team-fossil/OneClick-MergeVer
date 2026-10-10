@@ -7,6 +7,7 @@ import { DOCKER_HUB } from "@/lib/deploy/image-ref";
 import { resolveDeployImage, type DeployEvent } from "@/lib/deploy-image";
 import { beginDeployment, completeDeployment, failDeployment } from "@/lib/deployment-history";
 import { requireInstallationId } from "@/lib/session";
+import { getAppEnv } from "@/lib/env-store";
 import { readSecretOutput } from "@/lib/terraform";
 
 export const runtime = "nodejs";
@@ -51,11 +52,13 @@ export async function POST(request: NextRequest): Promise<Response> {
       let cleanup: () => Promise<void> = async () => undefined;
       let recordId: string | undefined;
       try {
-        let appEnv: Record<string, string> | undefined;
+        // Saved application variables only exist for repositories (GitHub builds); a ZIP has none.
+        let appEnv: Record<string, string> | undefined =
+          input.source === "github" ? await getAppEnv(requireInstallationId(request), input.repository) : undefined;
         if (input.database) {
           const databaseUrl = await readSecretOutput("gcp-db", "database_url");
           if (!databaseUrl) throw new Error("연결할 Cloud SQL 데이터베이스가 없습니다. 먼저 데이터베이스를 만드세요.");
-          appEnv = { DATABASE_URL: databaseUrl };
+          appEnv = { ...appEnv, DATABASE_URL: databaseUrl };
           emit({ phase: "database", message: "Cloud SQL 데이터베이스를 DATABASE_URL로 연결합니다" });
         }
         const prepared = await resolveDeployImage(request, input, archive, emit);
