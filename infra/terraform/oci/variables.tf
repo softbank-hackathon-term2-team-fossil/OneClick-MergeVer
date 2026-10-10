@@ -1,0 +1,86 @@
+variable "tenancy_ocid" {
+  type = string
+}
+
+variable "user_ocid" {
+  type = string
+}
+
+variable "fingerprint" {
+  type = string
+}
+
+variable "private_key_path" {
+  type        = string
+  description = "OCI API signing private key (not the SSH key)."
+}
+
+variable "region" {
+  type = string
+}
+
+variable "compartment_ocid" {
+  type        = string
+  default     = ""
+  description = "Empty uses the tenancy root compartment."
+}
+
+variable "name_prefix" {
+  type    = string
+  default = "sbsb"
+}
+
+variable "ssh_public_key" {
+  type        = string
+  description = "Public key installed for the ubuntu user on the VM."
+}
+
+variable "instance_shape" {
+  type    = string
+  default = "VM.Standard.A1.Flex"
+}
+
+variable "instance_ocpus" {
+  type    = number
+  default = 1
+}
+
+variable "instance_memory_gb" {
+  type    = number
+  default = 6
+}
+
+variable "container_image" {
+  type    = string
+  default = ""
+}
+
+variable "container_port" {
+  type    = number
+  default = 8000
+}
+
+variable "allowed_cidr" {
+  type    = string
+  default = "0.0.0.0/0"
+}
+
+variable "db_version" {
+  type    = string
+  default = "16"
+}
+
+variable "db_shape" {
+  type    = string
+  default = "PostgreSQL.VM.Standard.E4.Flex.2.32GB"
+}
+
+variable "db_ocpus" {
+  type    = number
+  default = 2
+}
+
+variable "db_memory_gb" {
+  type    = number
+  default = 32
+}
