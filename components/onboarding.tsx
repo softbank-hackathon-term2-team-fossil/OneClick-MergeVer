@@ -31,7 +31,7 @@ export function Onboarding() {
   const [analysis, setAnalysis] = useState<RepositoryAnalysis | null>(null);
   const [setup, setSetup] = useState<GeneratedSetup | null>(null);
   const [dockerfile, setDockerfile] = useState("");
-  const [pullRequest, setPullRequest] = useState<{ number: number; htmlUrl: string; branch: string; merged?: boolean } | null>(null);
+  const [pullRequest, setPullRequest] = useState<{ number: number; htmlUrl: string; branch: string; merged?: boolean; confirmedMerge?: boolean } | null>(null);
   const [pipelineStep, setPipelineStep] = useState<"idle" | "analyzing" | "generating" | "merging" | "completed">("idle");
   const [showAdvancedSetup, setShowAdvancedSetup] = useState(false);
   const [showCiSetup, setShowCiSetup] = useState(false);
@@ -814,7 +814,9 @@ export function Onboarding() {
                     <div style={{ fontSize: "12px", color: "var(--text-sub)", marginTop: "2px" }}>
                       {pullRequest?.merged ? (
                         <span style={{ color: "#099268", fontWeight: 600 }}>
-                          ✓ PR #{pullRequest.number} 생성 및 <code>{branch || "main"}</code> 브랜치 자동 머지 완료! (수동 승인 불필요)
+                          {pullRequest.confirmedMerge
+                            ? <>✓ PR #{pullRequest.number}을 변경 내용 확인 후 <code>{branch || "main"}</code> 브랜치에 머지했습니다.</>
+                            : <>✓ PR #{pullRequest.number} 생성 및 <code>{branch || "main"}</code> 브랜치 자동 머지 완료! (수동 승인 불필요)</>}
                         </span>
                       ) : pullRequest && !pullRequest.merged ? (
                         <>
@@ -828,7 +830,7 @@ export function Onboarding() {
                             repository={repository}
                             pullNumber={pullRequest.number}
                             htmlUrl={pullRequest.htmlUrl}
-                            onMerged={() => setPullRequest((current) => (current ? { ...current, merged: true } : current))}
+                            onMerged={() => setPullRequest((current) => (current ? { ...current, merged: true, confirmedMerge: true } : current))}
                           />
                         </>
                       ) : pipelineStep === "merging" ? (
