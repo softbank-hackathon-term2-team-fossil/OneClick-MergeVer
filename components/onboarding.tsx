@@ -13,6 +13,8 @@ import type {
 import { Deployment } from "@/components/deployment";
 import { DeploymentHistory } from "@/components/deployment-history";
 import { DomainConnect } from "@/components/domain-connect";
+import { EnvVars } from "@/components/env-vars";
+import { HealthMonitor } from "@/components/health-monitor";
 import { FailureAnalysisPanel } from "@/components/failure-analysis";
 import { PrMergeConfirm } from "@/components/pr-merge";
 
@@ -1566,6 +1568,8 @@ export function Onboarding() {
             </div>
           )}
 
+          {repository && <EnvVars repository={repository} />}
+          {repository && <HealthMonitor repository={repository} />}
           <DeploymentHistory records={history} busy={Boolean(busy)} onRollback={rollback} />
         </>
       )}
