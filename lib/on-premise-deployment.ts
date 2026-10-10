@@ -7,6 +7,8 @@ import { dataStackScript, encodeEnvFile, removeDataStackScript } from "@/lib/dat
 import { shellQuote } from "@/lib/shell";
 
 type DeploymentInput = {
+  /** Names the app's containers, network and data stack on the server: see appIdentifier */
+  appId: string;
   host: string;
   sshPort: number;
   username: string;
@@ -32,8 +34,17 @@ export type ConnectionTestInput = {
   privateKey?: string;
 };
 
-export function appIdentifier(image: string): string {
-  return createHash("sha256").update(image.split(":")[0]).digest("hex").slice(0, 12);
+const shortHash = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 12);
+
+/** One id per GitHub repository, so several apps can share a server without touching each other. */
+export function appIdentifier(repository: string): string {
+  return shortHash(repository.toLowerCase());
+}
+
+// The id used before: the image repository, which every SBSB app pushes to, so all apps shared it.
+// Only kept to clean up containers deployed under it.
+export function legacyAppIdentifier(image: string): string {
+  return shortHash(image.split(":")[0]);
 }
 
 /** The Docker network an app's containers (and its databases) share on the server */
@@ -108,7 +119,7 @@ export type OnPremiseDeploymentResult = {
   publicUrl?: string;
 };
 
-type ScriptInput = Pick<DeploymentInput, "image" | "registry" | "registryUsername" | "hostPort" | "containerPort"> & {
+type ScriptInput = Pick<DeploymentInput, "appId" | "image" | "registry" | "registryUsername" | "hostPort" | "containerPort"> & {
   withDataStack: boolean;
 };
 
@@ -124,14 +135,53 @@ export function deploymentStdin(input: { registryPassword: string; appEnv: Recor
   ].join("\n") + "\n";
 }
 
+// Fails before anything changes when another container or program holds the host port.
+// Its own proxy (a redeploy) and the previous id's proxy (replaced by this deployment) are fine.
+function hostPortCheckScript(hostPort: number, legacyProxyName: string): string {
+  return `
+if [ "$PROXY_RUNNING" != "true" ]; then
+  PORT_USERS="$(docker ps --filter publish=${hostPort} --format '{{.Names}}' | grep -vxF ${shellQuote(legacyProxyName)} || true)"
+  if [ -n "$PORT_USERS" ]; then
+    echo "Host port ${hostPort} is already used by another container ($PORT_USERS). Choose a different host port for this app." >&2
+    exit 34
+  fi
+  if [ -z "$(docker ps -q --filter name=^/${legacyProxyName}$ --filter publish=${hostPort})" ] && command -v ss >/dev/null 2>&1 \\
+    && [ -n "$(ss -Hltn "( sport = :${hostPort} )" 2>/dev/null)" ]; then
+    echo "Host port ${hostPort} is already used by another program on this server. Choose a different host port for this app." >&2
+    exit 34
+  fi
+fi
+`;
+}
+
+// Runs once the new app is healthy and before its proxy takes the port, only on the first deploy
+// under the current id. Databases are kept: their data may belong to any app that used the old id.
+function legacyCleanupScript(legacyId: string): string {
+  const names = [`sbsb-proxy-${legacyId}`, `sbsb-app-${legacyId}-blue`, `sbsb-app-${legacyId}-green`, `sbsb-tunnel-${legacyId}`, `sbsb-${legacyId}`];
+  const dataProject = `sbsb-data-${legacyId}`;
+  return `
+if [ "$PROXY_RUNNING" != "true" ]; then
+${names.map((name) => `  if docker inspect ${shellQuote(name)} >/dev/null 2>&1; then
+    echo 'Removing a container deployed under the previous app id: ${name}'
+    docker rm -f ${shellQuote(name)} >/dev/null 2>&1 || true
+  fi`).join("\n")}
+  if [ -n "$(docker ps -aq --filter label=com.docker.compose.project=${dataProject})" ]; then
+    echo 'Database containers from the previous app id (${dataProject}) were kept with their data. They are no longer used by this app.'
+  fi
+fi
+`;
+}
+
 export function buildDeploymentScript(input: ScriptInput): string {
-  const appId = appIdentifier(input.image);
+  const appId = input.appId;
+  const legacyId = legacyAppIdentifier(input.image);
   const netName = appNetwork(appId);
   const proxyName = `sbsb-proxy-${appId}`;
   const slotBlue = `sbsb-app-${appId}-blue`;
   const slotGreen = `sbsb-app-${appId}-green`;
   const tunnelName = `sbsb-tunnel-${appId}`;
   const legacyName = `sbsb-${appId}`;
+  const legacyProxyName = `sbsb-proxy-${legacyId}`;
 
   // Zero-downtime rolling deployment script:
   // 1. Authenticate & pull target image (and proxy image).
@@ -165,6 +215,8 @@ echo 'Ensuring reverse proxy and tunnel images...'
 docker pull nginx:alpine >/dev/null 2>&1 || true
 docker pull cloudflare/cloudflared:latest >/dev/null 2>&1 || true
 
+PROXY_RUNNING="$(docker inspect -f '{{.State.Running}}' ${shellQuote(proxyName)} 2>/dev/null || true)"
+${hostPortCheckScript(input.hostPort, legacyProxyName)}
 docker network inspect ${shellQuote(netName)} >/dev/null 2>&1 || docker network create ${shellQuote(netName)}
 
 CONFIG_DIR="$HOME/.sbsb/proxy/${appId}"
@@ -222,7 +274,7 @@ if [ "$READY" -ne 1 ]; then
   docker rm -f "$CANDIDATE" >/dev/null 2>&1 || true
   exit 32
 fi
-
+${legacyId === appId ? "" : legacyCleanupScript(legacyId)}
 cat << EOF > "$CONFIG_DIR/default.conf"
 map \\$http_upgrade \\$connection_upgrade {
     default upgrade;

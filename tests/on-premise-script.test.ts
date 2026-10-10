@@ -5,9 +5,10 @@ vi.mock("server-only", () => ({}));
 
 import { createDataStack } from "../lib/database/stack";
 import { dataStackScript, encodeEnvFile, removeDataStackScript } from "../lib/database/stack-script";
-import { appIdentifier, buildDeploymentScript, deploymentStdin } from "../lib/on-premise-deployment";
+import { appIdentifier, buildDeploymentScript, deploymentStdin, legacyAppIdentifier } from "../lib/on-premise-deployment";
 
 const base = {
+  appId: "0123456789ab",
   image: "sbsb/sbsb-images:owner-repo-1a2b3c4d-abc",
   registry: "docker.io",
   registryUsername: "sbsb",
@@ -93,6 +94,36 @@ describe("buildDeploymentScript", () => {
     expect(candidate).toBeGreaterThan(stack);
     expect(bashSyntaxOk(script)).toEqual({ ok: true, stderr: "" });
   });
+
+  it("names the app's containers, network and data stack after the given app id", () => {
+    const script = buildDeploymentScript({ ...base, withDataStack: true });
+    for (const name of ["sbsb-net-0123456789ab", "sbsb-proxy-0123456789ab", "sbsb-app-0123456789ab-blue", "sbsb-tunnel-0123456789ab", "sbsb-data-0123456789ab"]) {
+      expect(script).toContain(name);
+    }
+  });
+
+  it("checks the host port before changing anything, ignoring its own and the previous id's proxy", () => {
+    const script = buildDeploymentScript({ ...base, withDataStack: true });
+    const check = script.indexOf("--filter publish=8080");
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(script.indexOf("docker network create"));
+    expect(check).toBeLessThan(script.indexOf("up -d --wait"));
+    expect(script).toContain(`sbsb-proxy-${legacyAppIdentifier(base.image)}`);
+    expect(script).toContain("exit 34");
+  });
+
+  it("removes the previous id's app containers once the new app is healthy, but keeps its databases", () => {
+    const legacy = legacyAppIdentifier(base.image);
+    const script = buildDeploymentScript({ ...base, withDataStack: true });
+    const cleanup = script.indexOf(`docker rm -f 'sbsb-app-${legacy}-blue'`);
+    expect(cleanup).toBeGreaterThan(script.indexOf("READY=1"));
+    expect(cleanup).toBeLessThan(script.indexOf("Starting reverse proxy"));
+    for (const name of [`sbsb-proxy-${legacy}`, `sbsb-app-${legacy}-green`, `sbsb-tunnel-${legacy}`, `sbsb-${legacy}`]) {
+      expect(script).toContain(`docker rm -f '${name}'`);
+    }
+    expect(script).not.toContain(`sbsb-data-${legacy}' down`);
+    expect(script).toContain(`com.docker.compose.project=sbsb-data-${legacy}`);
+  });
 });
 
 describe("deploymentStdin", () => {
@@ -113,6 +144,16 @@ describe("deploymentStdin", () => {
 
 describe("appIdentifier", () => {
   it("is a short hex id", () => {
-    expect(appIdentifier(base.image)).toMatch(/^[a-f0-9]{12}$/);
+    expect(appIdentifier("owner/repo")).toMatch(/^[a-f0-9]{12}$/);
+  });
+
+  it("differs per repository, though all repositories push to one image repository", () => {
+    expect(appIdentifier("owner/node-app")).not.toBe(appIdentifier("owner/fastapi-app"));
+    expect(appIdentifier("Owner/Repo")).toBe(appIdentifier("owner/repo"));
+  });
+
+  it("is not the id used before, which every repository shared", () => {
+    expect(appIdentifier("owner/repo")).not.toBe(legacyAppIdentifier(base.image));
+    expect(legacyAppIdentifier("sbsb/sbsb-images:a-1")).toBe(legacyAppIdentifier("sbsb/sbsb-images:b-2"));
   });
 });

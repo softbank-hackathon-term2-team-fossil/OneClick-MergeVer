@@ -83,7 +83,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
     // Only on explicit request: the app's database containers and their volumes are deleted too.
     if (request.nextUrl.searchParams.get("purgeData") === "true") {
       const connection = await getDeploymentConnection(installationId, repository);
-      if (connection) await removeDataStack(connection, appIdentifier(dockerHubTag(repository, "latest")));
+      if (connection) await removeDataStack(connection, appIdentifier(repository));
     }
     await deleteDeploymentConnection(installationId, repository);
     return NextResponse.json({ success: true });
@@ -143,7 +143,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const credential = dockerHubPullCredential();
     const image = dockerHubTag(body.repository, imageTag);
     const project = await ensureProject(installationId, body.repository);
-    const plan = await planOnPremiseApp(project.id, image);
+    const appId = appIdentifier(body.repository);
+    const plan = await planOnPremiseApp(project.id, appId);
     const record = await beginDeployment({
       installationId,
       repository: body.repository,
@@ -159,6 +160,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     try {
       ({ logs, publicUrl } = await deployToOnPremise({
         ...connection,
+        appId,
         image,
         registry: credential.registry,
         registryUsername: credential.username,

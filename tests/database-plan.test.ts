@@ -15,7 +15,7 @@ import { findProject } from "../lib/projects";
 
 const installationId = 7;
 const repository = "owner/app";
-const image = "sbsb/sbsb-images:owner-app-12345678-abc";
+const appId = appIdentifier(repository);
 
 async function projectId() {
   return (await findProject(installationId, repository))!.id;
@@ -28,13 +28,12 @@ describe("planOnPremiseApp", () => {
 
   it("has no data stack and no variables for an app without databases", async () => {
     await setEnvVar(installationId, repository, { key: "API_KEY", value: "k" });
-    expect(await planOnPremiseApp(await projectId(), image)).toEqual({ appEnv: { API_KEY: "k" }, databases: [] });
+    expect(await planOnPremiseApp(await projectId(), appId)).toEqual({ appEnv: { API_KEY: "k" }, databases: [] });
   });
 
   it("runs detected databases on the app's network and hands the app their URLs", async () => {
     await syncDetectedDatabases(installationId, repository, ["postgres", "redis"]);
-    const plan = await planOnPremiseApp(await projectId(), image);
-    const appId = appIdentifier(image);
+    const plan = await planOnPremiseApp(await projectId(), appId);
 
     expect(plan.databases).toEqual(["postgres", "redis"]);
     expect(plan.dataStack?.project).toBe(`sbsb-data-${appId}`);
@@ -47,7 +46,7 @@ describe("planOnPremiseApp", () => {
     await syncDetectedDatabases(installationId, repository, ["postgres", "redis"]);
     await setEnvVar(installationId, repository, { key: "DATABASE_URL", value: "postgresql://u:p@rds:5432/x" });
     await setEnvVar(installationId, repository, { key: "DB_HOST", value: "rds" });
-    const plan = await planOnPremiseApp(await projectId(), image);
+    const plan = await planOnPremiseApp(await projectId(), appId);
 
     expect(plan.databases).toEqual(["redis"]);
     expect(Object.keys(JSON.parse(plan.dataStack!.compose).services)).toEqual(["cache"]);
