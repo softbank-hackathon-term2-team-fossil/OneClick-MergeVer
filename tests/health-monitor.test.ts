@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { decide, HealthMonitor, httpCheck, MonitorRegistry, type CheckResult, type MonitorConfig } from "../lib/health-monitor";
+import { decide, HealthMonitor, httpCheck, isSameServer, MonitorRegistry, type CheckResult, type MonitorConfig } from "../lib/health-monitor";
 
 const ok: CheckResult = { ok: true, status: 200, latencyMs: 12, error: null };
 const down: CheckResult = { ok: false, status: 502, latencyMs: 30, error: "HTTP 502" };
@@ -108,5 +108,20 @@ describe("MonitorRegistry", () => {
     expect(registry.list("o/r")[0].threshold).toBe(5);
     expect(registry.stop(config.key)?.state).toBe("stopped");
     vi.useRealTimers();
+  });
+});
+
+describe("isSameServer", () => {
+  it("matches the deployment destination against the saved connection", () => {
+    expect(isSameServer("pyan.kr:8100", "pyan.kr", 8100)).toBe(true);
+    expect(isSameServer("PYAN.kr:8100", "pyan.kr", 8100)).toBe(true);
+    expect(isSameServer("[2001:db8::1]:8100", "2001:db8::1", 8100)).toBe(true);
+  });
+
+  it("refuses another host, another port or a missing destination", () => {
+    expect(isSameServer("168.110.103.161:8100", "pyan.kr", 8100)).toBe(false);
+    expect(isSameServer("pyan.kr:8000", "pyan.kr", 8100)).toBe(false);
+    expect(isSameServer(null, "pyan.kr", 8100)).toBe(false);
+    expect(isSameServer("pyan.kr", "pyan.kr", 8100)).toBe(false);
   });
 });

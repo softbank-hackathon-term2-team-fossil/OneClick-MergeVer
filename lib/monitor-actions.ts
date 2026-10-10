@@ -6,7 +6,7 @@ import { beginDeployment, completeDeployment, failDeployment, listDeployments, r
 import { getDeploymentConnection } from "@/lib/deployment-store";
 import { assertDockerHubArtifact, dockerHubPullCredential, dockerHubTag } from "@/lib/dockerhub";
 import { getAppEnv } from "@/lib/env-store";
-import { httpCheck, MonitorRegistry, type MonitorConfig } from "@/lib/health-monitor";
+import { httpCheck, isSameServer, MonitorRegistry, type MonitorConfig } from "@/lib/health-monitor";
 import { deployToOnPremise } from "@/lib/on-premise-deployment";
 
 // Restores the newest earlier successful on-premises deployment of a fixed commit.
@@ -18,6 +18,12 @@ async function rollbackOnPremise(installationId: number, repository: string): Pr
 
   const connection = await getDeploymentConnection(installationId, repository);
   if (!connection) throw new Error("저장된 배포 서버가 없습니다.");
+  // Never roll back onto a server other than the one that served the failing deployment.
+  if (current && !isSameServer(current.destination, connection.host, connection.hostPort)) {
+    throw new Error(
+      `저장된 서버(${connection.host}:${connection.hostPort})가 장애 배포의 서버(${current.destination ?? "알 수 없음"})와 달라 자동 롤백을 중단했습니다.`,
+    );
+  }
 
   const rollback = await resolveRollback(installationId, repository, previous.id);
   await assertDockerHubArtifact(repository, rollback.imageTag);

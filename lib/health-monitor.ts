@@ -23,6 +23,19 @@ export type MonitorSnapshot = {
   events: MonitorEvent[];
 };
 
+// A deployment record stores "host:port" as its destination. The saved server connection may have been
+// changed or deleted since, and an automatic rollback must never go to a different server than the one
+// that was serving the failing deployment.
+export function isSameServer(destination: string | null | undefined, host: string, hostPort: number): boolean {
+  if (!destination) return false;
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/^[|]$/g, "");
+  const index = destination.lastIndexOf(":");
+  if (index <= 0) return false;
+  const destinationHost = normalize(destination.slice(0, index).replace(/^[|]$/g, ""));
+  const destinationPort = Number(destination.slice(index + 1));
+  return destinationHost === normalize(host) && destinationPort === hostPort;
+}
+
 export type CheckResult = { ok: boolean; status: number | null; latencyMs: number; error: string | null };
 
 export type Decision = { failures: number; state: MonitorState; rollback: boolean };
