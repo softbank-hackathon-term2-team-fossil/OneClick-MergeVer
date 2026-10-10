@@ -5,6 +5,50 @@ type Row = Record<string, unknown>;
 
 const matches = (row: Row, where: Row = {}) => Object.entries(where).every(([key, value]) => row[key] === value);
 
+// Compound unique keys ({ projectId_kind: { projectId, kind } }) are matched field by field.
+const flatten = (where: Row): Row =>
+  Object.fromEntries(Object.entries(where).flatMap(([key, value]) =>
+    key.includes("_") && value && typeof value === "object" && !(value instanceof Date) ? Object.entries(value as Row) : [[key, value]]));
+
+// A table keyed by id with the calls the project database and variable stores make.
+function createTable(rows: Row[], nextId: () => string) {
+  const copy = (row: Row | undefined) => (row ? { ...row } : null);
+  return {
+    async findMany({ where }: { where?: Row } = {}) {
+      return rows.filter((row) => matches(row, where)).map((row) => ({ ...row }));
+    },
+    async findUnique({ where }: { where: Row }) {
+      return copy(rows.find((row) => matches(row, flatten(where))));
+    },
+    async create({ data }: { data: Row }) {
+      const row = { id: nextId(), createdAt: new Date(), updatedAt: new Date(), ...data };
+      rows.push(row);
+      return { ...row };
+    },
+    async update({ where, data }: { where: Row; data: Row }) {
+      const row = rows.find((item) => matches(item, flatten(where)));
+      if (!row) throw new Error("Record to update not found.");
+      Object.assign(row, data, { updatedAt: new Date() });
+      return { ...row };
+    },
+    async upsert({ where, create, update }: { where: Row; create: Row; update: Row }) {
+      const row = rows.find((item) => matches(item, flatten(where)));
+      if (row) {
+        Object.assign(row, update, { updatedAt: new Date() });
+        return { ...row };
+      }
+      const created = { id: nextId(), createdAt: new Date(), updatedAt: new Date(), ...create };
+      rows.push(created);
+      return { ...created };
+    },
+    async deleteMany({ where }: { where: Row }) {
+      const before = rows.length;
+      for (let index = rows.length - 1; index >= 0; index--) if (matches(rows[index], where)) rows.splice(index, 1);
+      return { count: before - rows.length };
+    },
+  };
+}
+
 export function createFakeDb() {
   const projects: Row[] = [];
   const servers: Row[] = [];
@@ -81,6 +125,8 @@ export function createFakeDb() {
         return { count: found.length };
       },
     },
+    projectDatabase: createTable([], nextId),
+    projectEnvVar: createTable([], nextId),
     async $queryRaw() {
       return [];
     },

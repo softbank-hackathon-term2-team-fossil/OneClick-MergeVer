@@ -23,6 +23,8 @@ type BeginInput = {
   image: string;
   destination?: string;
   rollbackOf?: string;
+  /** On-premises: managed databases running alongside this deployment */
+  databases?: string[];
 };
 
 // Records a deployment as RUNNING before any remote work starts.
@@ -54,6 +56,7 @@ export async function beginDeployment(input: BeginInput): Promise<{ id: string; 
         imageTag: input.imageTag,
         image: input.image,
         destination: input.destination ?? null,
+        databases: input.databases ?? [],
       },
       select: { id: true, number: true },
     });

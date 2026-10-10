@@ -1,10 +1,11 @@
 import "server-only";
 
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { db } from "@/lib/db";
 import { ensureProject, findProject } from "@/lib/projects";
+import { decrypt, encrypt, type EncryptedValue } from "@/lib/secret-box";
 import { formatSetupCommand, generateSshKeyPair } from "./ssh-keygen";
 
 export type DeploymentConnection = {
@@ -22,53 +23,14 @@ export type SavedDeploymentTarget = Omit<DeploymentConnection, "password" | "pri
   updatedAt: string;
 };
 
-type EncryptedValue = {
-  iv: string;
-  tag: string;
-  data: string;
-};
-
 // The JSON file used before the database existed. Read once per project to carry saved servers over.
 type LegacyStore = Record<string, { target: SavedDeploymentTarget; credential: EncryptedValue }>;
 const legacyStorePath = path.join(process.cwd(), ".sbsb-data", "deployments.json");
-
-function encryptionKey(): Buffer {
-  const secret = process.env.SBSB_CREDENTIAL_ENCRYPTION_KEY?.trim();
-  if (!secret || secret.length < 32) {
-    throw new Error("SBSB_CREDENTIAL_ENCRYPTION_KEY must contain at least 32 characters.");
-  }
-  return createHash("sha256").update(secret).digest();
-}
 
 function recordId(installationId: number, repository: string): string {
   return createHash("sha256")
     .update(`${installationId}:${repository.toLowerCase()}`)
     .digest("hex");
-}
-
-function encrypt(value: object): EncryptedValue {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
-  const data = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
-  return {
-    iv: iv.toString("base64url"),
-    tag: cipher.getAuthTag().toString("base64url"),
-    data: data.toString("base64url"),
-  };
-}
-
-function decrypt<T>(value: EncryptedValue): T {
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    encryptionKey(),
-    Buffer.from(value.iv, "base64url"),
-  );
-  decipher.setAuthTag(Buffer.from(value.tag, "base64url"));
-  const data = Buffer.concat([
-    decipher.update(Buffer.from(value.data, "base64url")),
-    decipher.final(),
-  ]);
-  return JSON.parse(data.toString("utf8")) as T;
 }
 
 type ServerRow = {

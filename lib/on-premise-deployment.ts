@@ -2,6 +2,9 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { Client, type ConnectConfig } from "ssh2";
+import type { DataStack } from "@/lib/database/stack";
+import { dataStackScript, encodeEnvFile, removeDataStackScript } from "@/lib/database/stack-script";
+import { shellQuote } from "@/lib/shell";
 
 type DeploymentInput = {
   host: string;
@@ -15,6 +18,10 @@ type DeploymentInput = {
   registry: string;
   registryUsername: string;
   registryPassword: string;
+  /** Variables for the app container: database connections and the user's own values */
+  appEnv?: Record<string, string>;
+  /** The app's databases, run as a separate compose project that outlives app swaps */
+  dataStack?: DataStack;
 };
 
 export type ConnectionTestInput = {
@@ -25,12 +32,13 @@ export type ConnectionTestInput = {
   privateKey?: string;
 };
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'"'"'`)}'`;
+export function appIdentifier(image: string): string {
+  return createHash("sha256").update(image.split(":")[0]).digest("hex").slice(0, 12);
 }
 
-function appIdentifier(image: string): string {
-  return createHash("sha256").update(image.split(":")[0]).digest("hex").slice(0, 12);
+/** The Docker network an app's containers (and its databases) share on the server */
+export function appNetwork(appId: string): string {
+  return `sbsb-net-${appId}`;
 }
 
 function connect(config: ConnectConfig): Promise<Client> {
@@ -100,21 +108,25 @@ export type OnPremiseDeploymentResult = {
   publicUrl?: string;
 };
 
-export async function deployToOnPremise(input: DeploymentInput): Promise<OnPremiseDeploymentResult> {
-  const auth = input.privateKey
-    ? { privateKey: input.privateKey }
-    : { password: input.password };
-  const client = await connect({
-    host: input.host,
-    port: input.sshPort,
-    username: input.username,
-    readyTimeout: 20_000,
-    keepaliveInterval: 5_000,
-    ...auth,
-  });
+type ScriptInput = Pick<DeploymentInput, "image" | "registry" | "registryUsername" | "hostPort" | "containerPort"> & {
+  withDataStack: boolean;
+};
 
+// Secrets reach the script on stdin, one line each, so they never show up in `ps` or shell history.
+// Order: registry password, app env file, data stack env file, data stack compose file (base64).
+export function deploymentStdin(input: { registryPassword: string; appEnv: Record<string, string>; dataStack?: DataStack }): string {
+  const base64 = (value: string) => Buffer.from(value).toString("base64");
+  return [
+    input.registryPassword,
+    base64(encodeEnvFile(input.appEnv)),
+    input.dataStack ? base64(encodeEnvFile(input.dataStack.env)) : "",
+    input.dataStack ? base64(input.dataStack.compose) : "",
+  ].join("\n") + "\n";
+}
+
+export function buildDeploymentScript(input: ScriptInput): string {
   const appId = appIdentifier(input.image);
-  const netName = `sbsb-net-${appId}`;
+  const netName = appNetwork(appId);
   const proxyName = `sbsb-proxy-${appId}`;
   const slotBlue = `sbsb-app-${appId}-blue`;
   const slotGreen = `sbsb-app-${appId}-green`;
@@ -130,13 +142,20 @@ export async function deployToOnPremise(input: DeploymentInput): Promise<OnPremi
   // 6. Update Nginx proxy config to route traffic to candidate container and reload Nginx seamlessly.
   // 7. Stop and remove previous container only after traffic is successfully switched.
   // 8. Launch Cloudflare Quick Tunnel to provide a public HTTPS URL accessible from anywhere.
-  const script = `set -Eeuo pipefail
+  // With databases, their data stack is brought up (or left as is) between steps 2 and 3.
+  return `set -Eeuo pipefail
 command -v docker >/dev/null || { echo 'Docker is not installed on this server.' >&2; exit 20; }
 docker info >/dev/null 2>&1 || { echo 'The SSH user cannot run Docker. Add the user to the docker group.' >&2; exit 21; }
 
 DOCKER_CONFIG="$(mktemp -d)"
 trap 'rm -rf "$DOCKER_CONFIG"' EXIT
 IFS= read -r REGISTRY_PASSWORD
+IFS= read -r APP_ENV_B64 || true
+IFS= read -r DATA_ENV_B64 || true
+IFS= read -r DATA_COMPOSE_B64 || true
+APP_ENV_FILE="$DOCKER_CONFIG/app.env"
+printf '%s' "$APP_ENV_B64" | base64 -d > "$APP_ENV_FILE"
+chmod 600 "$APP_ENV_FILE"
 printf '%s' "$REGISTRY_PASSWORD" | docker --config "$DOCKER_CONFIG" login ${shellQuote(input.registry)} --username ${shellQuote(input.registryUsername)} --password-stdin >/dev/null
 
 echo 'Pulling application image...'
@@ -150,6 +169,7 @@ docker network inspect ${shellQuote(netName)} >/dev/null 2>&1 || docker network 
 
 CONFIG_DIR="$HOME/.sbsb/proxy/${appId}"
 mkdir -p "$CONFIG_DIR"
+${input.withDataStack ? dataStackScript(`sbsb-data-${appId}`, appId) : ""}
 
 CURRENT=""
 if [ "$(docker inspect -f '{{.State.Running}}' ${shellQuote(slotBlue)} 2>/dev/null || true)" = "true" ]; then
@@ -172,7 +192,7 @@ fi
 
 echo "Starting candidate container ($CANDIDATE) alongside existing version..."
 docker rm -f "$CANDIDATE" >/dev/null 2>&1 || true
-docker run -d --name "$CANDIDATE" --network ${shellQuote(netName)} --restart unless-stopped ${shellQuote(input.image)}
+docker run -d --name "$CANDIDATE" --network ${shellQuote(netName)} --restart unless-stopped --env-file "$APP_ENV_FILE" ${shellQuote(input.image)}
 
 echo "Checking health of new container ($CANDIDATE)..."
 READY=0
@@ -286,9 +306,26 @@ else
   echo "Tunnel container status:"
   docker logs --tail 15 ${shellQuote(tunnelName)} 2>&1 || true
 fi`;
+}
 
+function sshAuth(input: ConnectionTestInput) {
+  return input.privateKey ? { privateKey: input.privateKey } : { password: input.password };
+}
+
+export async function deployToOnPremise(input: DeploymentInput): Promise<OnPremiseDeploymentResult> {
+  const client = await connect({
+    host: input.host,
+    port: input.sshPort,
+    username: input.username,
+    readyTimeout: 20_000,
+    keepaliveInterval: 5_000,
+    ...sshAuth(input),
+  });
+
+  const script = buildDeploymentScript({ ...input, withDataStack: Boolean(input.dataStack) });
+  const stdin = deploymentStdin({ registryPassword: input.registryPassword, appEnv: input.appEnv ?? {}, dataStack: input.dataStack });
   try {
-    const output = await execute(client, `bash -lc ${shellQuote(script)}`, `${input.registryPassword}\n`);
+    const output = await execute(client, `bash -lc ${shellQuote(script)}`, stdin);
     const lines = output.split("\n").filter(Boolean);
     const publicUrlLine = lines.find((l) => l.startsWith("SBSB_PUBLIC_URL: "));
     const publicUrl = publicUrlLine ? publicUrlLine.replace("SBSB_PUBLIC_URL: ", "").trim() : undefined;
@@ -302,4 +339,18 @@ fi`;
   }
 }
 
-
+/** Deletes an app's database containers and volumes on its server. Irreversible. */
+export async function removeDataStack(input: ConnectionTestInput, appId: string): Promise<string> {
+  const client = await connect({
+    host: input.host,
+    port: input.sshPort,
+    username: input.username,
+    readyTimeout: 15_000,
+    ...sshAuth(input),
+  });
+  try {
+    return await execute(client, `bash -lc ${shellQuote(removeDataStackScript(`sbsb-data-${appId}`, appId))}`);
+  } finally {
+    client.end();
+  }
+}
