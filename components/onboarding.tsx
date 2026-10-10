@@ -12,6 +12,7 @@ import type {
 } from "@/lib/types";
 import { Deployment } from "@/components/deployment";
 import { DeploymentHistory } from "@/components/deployment-history";
+import { DomainConnect } from "@/components/domain-connect";
 import { FailureAnalysisPanel } from "@/components/failure-analysis";
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -1497,6 +1498,8 @@ export function Onboarding() {
                       {busy === "deploy" ? "릴리즈 중…" : "다시 릴리즈"}
                     </button>
                   </div>
+
+                  <DomainConnect repository={repository} />
 
                   {/* DETAILS ACCORDION */}
                   {showDetails && (
