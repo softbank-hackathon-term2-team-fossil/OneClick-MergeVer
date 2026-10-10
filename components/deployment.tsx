@@ -2,16 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { FailureAnalysisPanel } from "@/components/failure-analysis";
+import { OciExistingPanel } from "@/components/oci-existing";
+import { CloudSqlPanel, TerraformPanel } from "@/components/terraform-panel";
 import type { ImageVersion } from "@/lib/types";
 
 type Instance = { id: string; name: string; state: string; publicAddress: string | null };
 type Event = { phase: string; message: string; image?: string; url?: string; instanceId?: string; dockerfile?: string };
 type Props = { repository: string; branch: string; onDeployed?: () => void };
 
-type Provider = "aws" | "azure" | "cloud-run";
-const PROVIDER_LABEL = { aws: "AWS", azure: "Azure", "cloud-run": "Cloud Run" } as const;
-const SERVER_LABEL = { aws: "EC2", azure: "VM", "cloud-run": "서비스" } as const;
-const DEFAULT_REGION = { aws: "ap-northeast-2", azure: "koreacentral", "cloud-run": "" } as const;
+type Provider = "aws" | "azure" | "cloud-run" | "oci";
+const PROVIDER_LABEL = { aws: "AWS", azure: "Azure", "cloud-run": "Cloud Run", oci: "OCI" } as const;
+const SERVER_LABEL = { aws: "EC2", azure: "VM", "cloud-run": "서비스", oci: "VM" } as const;
+const DEFAULT_REGION = { aws: "ap-northeast-2", azure: "koreacentral", "cloud-run": "", oci: "" } as const;
 
 // Cloud deployment panel: GitHub build or ZIP upload → Docker Hub → AWS EC2, Azure VM, or Cloud Run.
 export function Deployment({ repository, branch, onDeployed }: Props) {
@@ -31,6 +33,8 @@ export function Deployment({ repository, branch, onDeployed }: Props) {
   const [cloudError, setCloudError] = useState("");
   const [containerPort, setContainerPort] = useState<number | "">("");
   const [healthPath, setHealthPath] = useState("/");
+  const [attachDatabase, setAttachDatabase] = useState(false);
+  const [ociMode, setOciMode] = useState<"existing" | "new">("existing");
   const [events, setEvents] = useState<Event[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -62,11 +66,16 @@ export function Deployment({ repository, branch, onDeployed }: Props) {
 
   useEffect(() => {
     const controller = new AbortController();
-    setCheckingCloud(true);
     setCloudError("");
     setVerifiedRegion("");
     setInstances([]);
     setInstanceId("");
+    // OCI is provisioned with Terraform on the site server, so there is no instance list to check.
+    if (provider === "oci") {
+      setCheckingCloud(false);
+      return;
+    }
+    setCheckingCloud(true);
     const timer = setTimeout(async () => {
       try {
         const params = new URLSearchParams({ region });
@@ -120,6 +129,7 @@ export function Deployment({ repository, branch, onDeployed }: Props) {
         form.set("source", "zip");
         if (serverless) {
           form.set("healthPath", healthPath);
+          form.set("database", String(attachDatabase));
         } else {
           form.set("region", region);
           if (provider === "azure" && target === "new") form.set("vmSize", azureVmSize);
@@ -132,7 +142,7 @@ export function Deployment({ repository, branch, onDeployed }: Props) {
       } else {
         headers["Content-Type"] = "application/json";
         body = JSON.stringify(serverless
-          ? { source: "github", repository, branch, imageTag, containerPort, healthPath }
+          ? { source: "github", repository, branch, imageTag, containerPort, healthPath, database: attachDatabase }
           : { source: "github", repository, branch, imageTag, region, mode: target, instanceId, containerPort, ...(provider === "azure" && target === "new" ? { vmSize: azureVmSize } : {}) });
       }
       const response = await fetch(`/api/${provider}/deploy`, { method: "POST", headers, body });
@@ -200,7 +210,7 @@ export function Deployment({ repository, branch, onDeployed }: Props) {
   return (
     <div className="card">
       <h3 className="card-title">클라우드 서버에 배포하기</h3>
-      <p className="card-desc">Docker Hub의 같은 이미지를 AWS EC2, Azure VM, Cloud Run에 배포합니다.</p>
+      <p className="card-desc">Docker Hub의 같은 이미지를 AWS EC2, Azure VM, Cloud Run에 배포하고, OCI는 Terraform으로 서버와 DB를 만듭니다.</p>
 
       <div className="form-group">
         <label className="form-label">배포할 소스</label>
@@ -240,13 +250,16 @@ export function Deployment({ repository, branch, onDeployed }: Props) {
 
       <div className="form-group">
         <label className="form-label">클라우드</label>
-        <div className="seg-row three" role="tablist" aria-label="배포할 클라우드">
+        <div className="seg-row" style={{ gridTemplateColumns: "repeat(4, 1fr)" }} role="tablist" aria-label="배포할 클라우드">
           <button type="button" role="tab" aria-selected={provider === "aws"} className={`seg-btn ${provider === "aws" ? "active" : ""}`} onClick={() => changeProvider("aws")}>AWS EC2</button>
           <button type="button" role="tab" aria-selected={provider === "azure"} className={`seg-btn ${provider === "azure" ? "active" : ""}`} onClick={() => changeProvider("azure")}>Azure VM</button>
           <button type="button" role="tab" aria-selected={provider === "cloud-run"} className={`seg-btn ${provider === "cloud-run" ? "active" : ""}`} onClick={() => changeProvider("cloud-run")}>Cloud Run</button>
+          <button type="button" role="tab" aria-selected={provider === "oci"} className={`seg-btn ${provider === "oci" ? "active" : ""}`} onClick={() => changeProvider("oci")}>OCI</button>
         </div>
       </div>
 
+      {provider !== "oci" && (
+      <>
       <div className="form-group">
         <label className="form-label">{cloud} 리전</label>
         <input className="form-input" type="text" value={region} readOnly={serverless} placeholder={serverless ? "서버 설정에서 읽는 중" : DEFAULT_REGION[provider]}
@@ -259,6 +272,7 @@ export function Deployment({ repository, branch, onDeployed }: Props) {
           <label className="form-label">헬스체크 경로</label>
           <input className="form-input" type="text" value={healthPath} placeholder="/" onChange={(event) => setHealthPath(event.target.value)} />
           <p className="field-note">서버 없이 실행되고 요청에 따라 0~N개로 자동 확장됩니다. 새 버전이 이 경로에 응답하지 않으면 이전 버전으로 트래픽을 되돌립니다. /healthz는 Cloud Run이 가로채므로 쓸 수 없습니다.</p>
+          <CloudSqlPanel attach={attachDatabase} onAttachChange={setAttachDatabase} />
         </div>
       ) : (
       <div className="form-group">
@@ -293,6 +307,8 @@ export function Deployment({ repository, branch, onDeployed }: Props) {
         )}
       </div>
       )}
+      </>
+      )}
 
       <div className="form-group">
         <label className="form-label">컨테이너 내부 포트 (Dockerfile의 EXPOSE 값)</label>
@@ -300,13 +316,32 @@ export function Deployment({ repository, branch, onDeployed }: Props) {
           onChange={(event) => setContainerPort(event.target.value ? Number(event.target.value) : "")} />
       </div>
 
-      <button type="button" className="btn btn-primary" disabled={!canDeploy} onClick={() => void deploy()}>
-        {busy ? "배포 진행 중…" : `${cloud} ${server}에 배포하기`}
-      </button>
-      {!serverless && (
-        <button type="button" className="btn btn-secondary" style={{ marginTop: 10 }} disabled={busy || !verifyInstanceId || verifiedRegion !== region} onClick={() => void verifyDeployment()}>
-          현재 {server} 접속 확인
-        </button>
+      {provider === "oci" ? (
+        <>
+          <div className="form-group">
+            <label className="form-label">OCI 서버</label>
+            <div className="seg-row" role="tablist" aria-label="OCI 서버">
+              <button type="button" role="tab" aria-selected={ociMode === "existing"} className={`seg-btn ${ociMode === "existing" ? "active" : ""}`} onClick={() => setOciMode("existing")}>기존 VM 선택</button>
+              <button type="button" role="tab" aria-selected={ociMode === "new"} className={`seg-btn ${ociMode === "new" ? "active" : ""}`} onClick={() => setOciMode("new")}>새 VM + DB 생성</button>
+            </div>
+          </div>
+          {ociMode === "existing" ? (
+            <OciExistingPanel repository={repository} imageTag={source === "github" ? imageTag : ""} containerPort={containerPort} />
+          ) : (
+            <TerraformPanel image={source === "github" ? selectedVersion?.image ?? "" : ""} containerPort={containerPort} />
+          )}
+        </>
+      ) : (
+        <>
+          <button type="button" className="btn btn-primary" disabled={!canDeploy} onClick={() => void deploy()}>
+            {busy ? "배포 진행 중…" : `${cloud} ${server}에 배포하기`}
+          </button>
+          {!serverless && (
+            <button type="button" className="btn btn-secondary" style={{ marginTop: 10 }} disabled={busy || !verifyInstanceId || verifiedRegion !== region} onClick={() => void verifyDeployment()}>
+              현재 {server} 접속 확인
+            </button>
+          )}
+        </>
       )}
 
       {error && <div className="alert-banner error" style={{ marginTop: 16 }}>⚠️ {error}</div>}
