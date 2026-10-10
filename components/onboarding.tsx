@@ -11,6 +11,7 @@ import type {
   WorkflowRunSummary,
 } from "@/lib/types";
 import { Deployment } from "@/components/deployment";
+import { InfraProvision } from "@/components/infra-provision";
 import { DeploymentHistory } from "@/components/deployment-history";
 import { DomainConnect } from "@/components/domain-connect";
 import { EnvVars } from "@/components/env-vars";
@@ -1139,11 +1140,18 @@ export function Onboarding() {
 
           {/* CLOUD TAB CONTENT */}
           {selectedInfra === "cloud" && (
-            <Deployment
-              repository={repository}
-              branch={run?.branch || selectedRepository?.defaultBranch || ""}
-              onDeployed={() => void loadHistory(repository)}
-            />
+            <>
+              <Deployment
+                repository={repository}
+                branch={run?.branch || selectedRepository?.defaultBranch || ""}
+                onDeployed={() => void loadHistory(repository)}
+              />
+              <InfraProvision
+                repository={repository}
+                branch={run?.branch || selectedRepository?.defaultBranch || ""}
+                onDeployed={() => void loadHistory(repository)}
+              />
+            </>
           )}
 
           {/* ON-PREMISE TAB CONTENT */}
