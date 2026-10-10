@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { azureDockerHubSecret, dockerHubPullUsername } from "@/lib/cloud-config";
 import { run } from "@/lib/process";
+import { dockerEnvFlags, type AppEnv } from "@/lib/app-env";
 
 export const AZURE_DEFAULT_REGION = "koreacentral";
 
@@ -22,6 +23,7 @@ type AzureContext = Pick<AzureTarget, "subscriptionId" | "resourceGroup" | "regi
 type Account = { id: string; name: string; state: string };
 type SecretSource = { vault: string; secret: string; username: string };
 type Identity = { principalId?: string };
+let azureLoginPromise: Promise<void> | null = null;
 export type AzureVm = {
   id: string;
   name: string;
@@ -52,6 +54,7 @@ function validateRegion(region: string): void {
 
 async function az<T>(args: string[], timeoutMs = 120_000): Promise<T> {
   try {
+    await ensureAzureLogin();
     const output = await run("az", [...args, "--output", "json", "--only-show-errors"], { timeoutMs });
     return JSON.parse(output || "null") as T;
   } catch (error) {
@@ -60,6 +63,32 @@ async function az<T>(args: string[], timeoutMs = 120_000): Promise<T> {
     }
     throw error;
   }
+}
+
+/**
+ * Interactive `az login` sessions disappear when the site server restarts.
+ * When service-principal variables are configured, authenticate on demand so
+ * every new process can continue deploying without manual login.
+ */
+async function ensureAzureLogin(): Promise<void> {
+  const clientId = process.env.AZURE_CLIENT_ID?.trim() || "";
+  const clientSecret = process.env.AZURE_CLIENT_SECRET?.trim() || "";
+  const tenantId = process.env.AZURE_TENANT_ID?.trim() || "";
+  if (!clientId && !clientSecret && !tenantId) return;
+  if (!clientId || !clientSecret || !tenantId) {
+    throw new Error("Azure 서비스 주체 인증값(AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID)을 모두 설정하세요.");
+  }
+  if (!azureLoginPromise) {
+    azureLoginPromise = run("az", [
+      "login", "--service-principal", "--username", clientId,
+      "--password", clientSecret, "--tenant", tenantId,
+      "--output", "none", "--only-show-errors",
+    ], { timeoutMs: 60_000 }).then(() => undefined).catch((error) => {
+      azureLoginPromise = null;
+      throw new Error(`Azure 서비스 주체 로그인에 실패했습니다: ${error instanceof Error ? error.message : "unknown error"}`);
+    });
+  }
+  await azureLoginPromise;
 }
 
 export async function azureAccount(subscriptionId: string): Promise<Account> {
@@ -157,7 +186,7 @@ async function allowSecretRead(target: AzureTarget, vm: AzureVm, vault: string):
 
 // The script the VM runs. It reads the Docker Hub token from Key Vault with the VM's managed identity,
 // so the token is not part of the Run Command text.
-export function vmScript(source: SecretSource, image: string, containerPort: number): string {
+export function vmScript(source: SecretSource, image: string, containerPort: number, env?: AppEnv): string {
   if (!/^\d{1,5}$/.test(String(containerPort)) || containerPort < 1 || containerPort > 65535) throw new Error("올바른 컨테이너 포트를 입력하세요.");
   if (!/^[a-z0-9][a-z0-9./:_-]+$/.test(image)) throw new Error("올바르지 않은 이미지 주소입니다.");
   return `#!/bin/bash
@@ -177,7 +206,7 @@ for attempt in $(seq 1 18); do
 done
 docker --config "$DOCKER_CONFIG" pull ${image} >/dev/null
 docker rm -f sbsb-app >/dev/null 2>&1 || true
-docker run -d --restart unless-stopped --name sbsb-app -p 80:${containerPort} ${image} >/dev/null
+docker run -d --restart unless-stopped --name sbsb-app -p 80:${containerPort} ${dockerEnvFlags(env)}${image} >/dev/null
 for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
   status=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:80/ || true)
   if [[ "$status" =~ ^[1-4][0-9][0-9]$ ]]; then echo SBSB_DEPLOY_OK; exit 0; fi
@@ -189,14 +218,14 @@ exit 1
 `;
 }
 
-export async function deployAzureVm(target: AzureTarget, vm: AzureVm, image: string): Promise<string> {
+export async function deployAzureVm(target: AzureTarget, vm: AzureVm, image: string, env?: AppEnv): Promise<string> {
   const secret = azureDockerHubSecret();
   const source = { ...secret, username: dockerHubPullUsername() };
   await allowSecretRead(target, vm, secret.vault);
   const folder = await mkdtemp(join(tmpdir(), "sbsb-azure-"));
   try {
     const script = join(folder, "deploy.sh");
-    await writeFile(script, vmScript(source, image, target.containerPort), { mode: 0o600 });
+    await writeFile(script, vmScript(source, image, target.containerPort, env), { mode: 0o600 });
     const result = await az<{ value?: { message?: string }[] }>([
       "vm", "run-command", "invoke", "--ids", vm.id, "--command-id", "RunShellScript",
       "--scripts", `@${script}`, ...subscriptionArgs(target.subscriptionId),
