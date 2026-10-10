@@ -27,7 +27,15 @@ export async function listInstances(region: string): Promise<Instance[]> {
   const result = await aws<{ Reservations?: { Instances?: Instance[] }[] }>(region, "ec2", "describe-instances", [
     "--filters", "Name=instance-state-name,Values=running,pending,stopped",
   ]);
-  return (result.Reservations || []).flatMap((reservation) => reservation.Instances || []);
+  const hidden = new Set(
+    (process.env.SBSB_HIDDEN_AWS_INSTANCE_IDS || "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean),
+  );
+  return (result.Reservations || [])
+    .flatMap((reservation) => reservation.Instances || [])
+    .filter((instance) => !hidden.has(instance.InstanceId));
 }
 
 async function waitForInstance(region: string, instanceId: string): Promise<Instance> {

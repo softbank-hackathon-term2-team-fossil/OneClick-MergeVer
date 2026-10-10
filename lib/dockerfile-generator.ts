@@ -13,6 +13,7 @@ export async function generateDockerfile(
       "Return only Dockerfile text, without Markdown fences or explanation.",
       "Use a currently supported official slim runtime image and deterministic dependency installation when possible.",
       "For Debian-based Python or Node images, prefer bookworm or newer and never use bullseye.",
+      "For Python, use valid official tags such as python:3.11-slim-bookworm; never write python:<version>-bookworm-slim.",
       "Do not install compilers, build-essential, curl, or other OS packages unless the supplied dependencies clearly require them.",
       "Use a non-root user when practical, expose the inferred app port, and bind the server to 0.0.0.0.",
       "Do not embed secrets, credentials, source file contents, health checks that require unavailable tools, or provider-specific services.",

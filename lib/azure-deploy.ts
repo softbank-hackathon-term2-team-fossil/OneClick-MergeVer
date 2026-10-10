@@ -23,6 +23,7 @@ type AzureContext = Pick<AzureTarget, "subscriptionId" | "resourceGroup" | "regi
 type Account = { id: string; name: string; state: string };
 type SecretSource = { vault: string; secret: string; username: string };
 type Identity = { principalId?: string };
+let azureLoginPromise: Promise<void> | null = null;
 export type AzureVm = {
   id: string;
   name: string;
@@ -53,6 +54,7 @@ function validateRegion(region: string): void {
 
 async function az<T>(args: string[], timeoutMs = 120_000): Promise<T> {
   try {
+    await ensureAzureLogin();
     const output = await run("az", [...args, "--output", "json", "--only-show-errors"], { timeoutMs });
     return JSON.parse(output || "null") as T;
   } catch (error) {
@@ -61,6 +63,32 @@ async function az<T>(args: string[], timeoutMs = 120_000): Promise<T> {
     }
     throw error;
   }
+}
+
+/**
+ * Interactive `az login` sessions disappear when the site server restarts.
+ * When service-principal variables are configured, authenticate on demand so
+ * every new process can continue deploying without manual login.
+ */
+async function ensureAzureLogin(): Promise<void> {
+  const clientId = process.env.AZURE_CLIENT_ID?.trim() || "";
+  const clientSecret = process.env.AZURE_CLIENT_SECRET?.trim() || "";
+  const tenantId = process.env.AZURE_TENANT_ID?.trim() || "";
+  if (!clientId && !clientSecret && !tenantId) return;
+  if (!clientId || !clientSecret || !tenantId) {
+    throw new Error("Azure 서비스 주체 인증값(AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID)을 모두 설정하세요.");
+  }
+  if (!azureLoginPromise) {
+    azureLoginPromise = run("az", [
+      "login", "--service-principal", "--username", clientId,
+      "--password", clientSecret, "--tenant", tenantId,
+      "--output", "none", "--only-show-errors",
+    ], { timeoutMs: 60_000 }).then(() => undefined).catch((error) => {
+      azureLoginPromise = null;
+      throw new Error(`Azure 서비스 주체 로그인에 실패했습니다: ${error instanceof Error ? error.message : "unknown error"}`);
+    });
+  }
+  await azureLoginPromise;
 }
 
 export async function azureAccount(subscriptionId: string): Promise<Account> {

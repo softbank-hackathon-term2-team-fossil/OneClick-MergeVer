@@ -20,7 +20,11 @@ export function GET(request: NextRequest): NextResponse {
       request.nextUrl.searchParams.get("installation_id"),
     );
     const session = createInstallationSession(installationId);
-    const response = NextResponse.redirect(new URL("/?connected=1", request.url));
+    const publicUrl = process.env.SBSB_PUBLIC_URL?.trim();
+    const redirectBase = publicUrl ? new URL(publicUrl) : new URL(request.url);
+    const response = NextResponse.redirect(
+      new URL("/?connected=1", redirectBase),
+    );
     response.cookies.set(
       INSTALLATION_COOKIE,
       session,

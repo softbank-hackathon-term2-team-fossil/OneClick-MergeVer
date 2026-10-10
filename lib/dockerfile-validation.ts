@@ -6,6 +6,9 @@ export function validateDockerfile(input: string): string {
     .replace(/^```(?:dockerfile)?\s*/i, "")
     .replace(/\s*```$/, "")
     .replace(/^(FROM\s+\S+)-bullseye(?=\s|$)/gim, "$1-bookworm")
+    // The official Python image uses `slim-bookworm`, not `bookworm-slim`.
+    // Normalize this common LLM-generated typo before Docker sees it.
+    .replace(/^(FROM\s+python:[^\s:]+)-bookworm-slim(?=\s|$)/gim, "$1-slim-bookworm")
     .trim();
 
   if (!/^FROM\s+\S+/im.test(dockerfile)) {

@@ -103,6 +103,19 @@ export function parseAnalysis(text: string): FailureAnalysis {
   try {
     parsed = responseSchema.parse(extractJson(text));
   } catch (error) {
+    // A provider can occasionally ignore the JSON-only instruction. Preserve the
+    // original answer so the user still sees the deployment evidence instead of
+    // a secondary "Load failed" error from the parser.
+    const fallback = text.trim().slice(-2_000);
+    if (fallback) {
+      return {
+        summary: "AI가 구조화된 분석 형식으로 응답하지 않았습니다.",
+        cause: fallback,
+        suggestion: "위 원문 로그를 기준으로 컨테이너 로그와 포트를 확인한 뒤 다시 배포하세요.",
+        dockerfile: null,
+        note: "AI 응답 형식이 JSON이 아니어서 원문을 표시했습니다.",
+      };
+    }
     throw new Error(`The AI answer could not be understood: ${error instanceof Error ? error.message.slice(0, 160) : "invalid format"}`);
   }
 
