@@ -39,12 +39,15 @@ resource "google_sql_database_instance" "db" {
 resource "google_sql_database" "app" {
   name     = "app"
   instance = google_sql_database_instance.db.name
+  # The app creates tables owned by this role; dropping the instance removes both.
+  deletion_policy = "ABANDON"
 }
 
 resource "google_sql_user" "app" {
-  name     = "app"
-  instance = google_sql_database_instance.db.name
-  password = random_password.db.result
+  name            = "app"
+  instance        = google_sql_database_instance.db.name
+  password        = random_password.db.result
+  deletion_policy = "ABANDON"
 }
 
 resource "google_compute_firewall" "http" {
