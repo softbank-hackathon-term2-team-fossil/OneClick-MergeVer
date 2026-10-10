@@ -1,0 +1,89 @@
+// SBSB data model. Adapted from OneClick's schema: projects, saved servers, and deployment history.
+// SBSB has no user accounts, so a project belongs to the GitHub App installation that can access
+// the repository. The database URL is read from DATABASE_URL in prisma.config.ts.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Project {
+  id             String   @id @default(cuid())
+  installationId BigInt // GitHub App installation that owns this project
+  repository     String // owner/name, lower-cased
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  server      Server?
+  deployments Deployment[]
+
+  @@unique([installationId, repository])
+}
+
+enum ServerAuthType {
+  PASSWORD
+  PRIVATE_KEY
+}
+
+// The on-premises server a project deploys to. One per project, as before.
+// SSH credentials are stored only as AES-256-GCM ciphertext (see lib/deployment-store.ts).
+model Server {
+  id                  String         @id @default(cuid())
+  projectId           String         @unique
+  host                String
+  sshPort             Int            @default(22)
+  username            String
+  hostPort            Int
+  containerPort       Int
+  authType            ServerAuthType
+  encryptedCredential String
+  iv                  String
+  authTag             String
+  updatedAt           DateTime       @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+enum DeployTarget {
+  ONPREM
+  AWS
+  AZURE
+  CLOUD_RUN
+}
+
+enum DeployTrigger {
+  MANUAL
+  ROLLBACK
+}
+
+enum DeploymentStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+model Deployment {
+  id                 String           @id @default(cuid())
+  projectId          String
+  number             Int // per-project sequence (#1, #2 ...)
+  target             DeployTarget
+  trigger            DeployTrigger    @default(MANUAL)
+  sourceDeploymentId String? // for a rollback: the deployment being restored
+  imageTag           String // commit SHA published by the build, or "latest"
+  image              String // full image reference that was deployed
+  destination        String? // host:port, EC2 instance id, or Azure VM name
+  status             DeploymentStatus @default(RUNNING)
+  failureReason      String?
+  url                String?
+  startedAt          DateTime         @default(now())
+  finishedAt         DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, number])
+  @@index([projectId, target, startedAt])
+}
