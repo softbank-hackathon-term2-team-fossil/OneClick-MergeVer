@@ -85,3 +85,14 @@ export type SavedDeploymentTarget = {
   authType: "password" | "private-key";
   updatedAt: string;
 };
+
+export type PullRequestReviewResult = {
+  files: { filename: string; status: string; additions: number; deletions: number; patch: string }[];
+  facts: { fileCount: number; additions: number; deletions: number; allowedFilesOnly: boolean };
+  review: {
+    overview: string;
+    changes: { file: string; title: string; explanation: string; risk: "low" | "medium" | "high" }[];
+    concerns: string[];
+  } | null;
+  reviewError: string | null;
+};
