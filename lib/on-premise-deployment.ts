@@ -63,14 +63,23 @@ export async function testSshConnection(input: ConnectionTestInput): Promise<str
   const auth = input.privateKey
     ? { privateKey: input.privateKey }
     : { password: input.password };
-  const client = await connect({
-    host: input.host,
-    port: input.sshPort,
-    username: input.username,
-    readyTimeout: 15_000,
-    keepaliveInterval: 5_000,
-    ...auth,
-  });
+  let client: Client;
+  try {
+    client = await connect({
+      host: input.host,
+      port: input.sshPort,
+      username: input.username,
+      readyTimeout: 15_000,
+      keepaliveInterval: 5_000,
+      ...auth,
+    });
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : String(caught);
+    if (/authentication/i.test(message)) {
+      throw new Error("SSH 인증에 실패했습니다. 서버 터미널에서 안내된 공개키 등록 명령어를 실행했는지 확인해 주세요.");
+    }
+    throw caught;
+  }
 
   const script = [
     "set -Eeuo pipefail",
@@ -249,8 +258,10 @@ fi
 echo "Zero-downtime rolling deployment complete: active slot is now $CANDIDATE."
 
 TUNNEL_RUNNING="$(docker inspect -f '{{.State.Running}}' ${shellQuote(tunnelName)} 2>/dev/null || true)"
-if [ "$TUNNEL_RUNNING" != "true" ]; then
-  echo 'Starting public ingress tunnel...'
+TUNNEL_ERROR="$(docker logs --tail 25 ${shellQuote(tunnelName)} 2>&1 | grep -E 'Unauthorized|Tunnel not found' || true)"
+
+if [ "$TUNNEL_RUNNING" != "true" ] || [ -n "$TUNNEL_ERROR" ]; then
+  echo 'Starting/refreshing public ingress tunnel...'
   docker rm -f ${shellQuote(tunnelName)} >/dev/null 2>&1 || true
   docker run -d --name ${shellQuote(tunnelName)} \\
     --network ${shellQuote(netName)} \\
@@ -262,7 +273,7 @@ fi
 
 PUBLIC_URL=""
 for i in $(seq 1 18); do
-  PUBLIC_URL="$(docker logs ${shellQuote(tunnelName)} 2>&1 | grep -o 'https://[a-zA-Z0-9.-]*trycloudflare.com' | head -n 1 || true)"
+  PUBLIC_URL="$(docker logs ${shellQuote(tunnelName)} 2>&1 | grep -o 'https://[a-zA-Z0-9.-]*trycloudflare.com' | tail -n 1 || true)"
   if [ -n "$PUBLIC_URL" ]; then
     break
   fi

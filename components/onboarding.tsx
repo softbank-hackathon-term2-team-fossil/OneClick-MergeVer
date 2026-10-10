@@ -39,8 +39,9 @@ export function Onboarding() {
   const [serverHost, setServerHost] = useState("");
   const [sshPort, setSshPort] = useState("22");
   const [sshUsername, setSshUsername] = useState("");
-  const [sshPassword, setSshPassword] = useState("");
-  const [privateKey, setPrivateKey] = useState("");
+  const [sshPublicKey, setSshPublicKey] = useState("");
+  const [sshSetupCommand, setSshSetupCommand] = useState("");
+  const [copiedCommand, setCopiedCommand] = useState(false);
   const [hostPort, setHostPort] = useState("8000");
   const [containerPort, setContainerPort] = useState("8000");
 
@@ -126,6 +127,39 @@ export function Onboarding() {
     void loadSavedTarget();
     return () => controller.abort();
   }, [repository, connected]);
+
+  // Load SSH public key for on-premise registration
+  useEffect(() => {
+    if (!repository || !connected) {
+      setSshPublicKey("");
+      setSshSetupCommand("");
+      return;
+    }
+    const loadKey = async () => {
+      try {
+        const query = new URLSearchParams({ repository });
+        const data = await requestJson<{ publicKey: string; setupCommand: string }>(
+          `/api/deploy/ssh-key?${query}`,
+        );
+        setSshPublicKey(data.publicKey);
+        setSshSetupCommand(data.setupCommand);
+      } catch {
+        // ignore
+      }
+    };
+    void loadKey();
+  }, [repository, connected]);
+
+  const copySetupCommand = async () => {
+    if (!sshSetupCommand) return;
+    try {
+      await navigator.clipboard.writeText(sshSetupCommand);
+      setCopiedCommand(true);
+      setTimeout(() => setCopiedCommand(false), 2000);
+    } catch {
+      // fallback
+    }
+  };
 
   // 4. Auto-fetch latest workflow run and poll if building
   const fetchRun = useCallback(async (repo: string) => {
@@ -229,8 +263,6 @@ export function Onboarding() {
                 host: serverHost,
                 sshPort: Number(sshPort),
                 username: sshUsername,
-                password: sshPassword || undefined,
-                privateKey: privateKey || undefined,
                 hostPort: Number(hostPort),
                 containerPort: Number(containerPort),
               }),
@@ -245,8 +277,6 @@ export function Onboarding() {
       setDeployment(data.deployment);
       setSavedTarget(data.deployment.target);
       setShowEditServer(false);
-      setSshPassword("");
-      setPrivateKey("");
       if (rollbackOf) {
         setDeployedSha(rollbackOf.imageTag);
       } else if (run?.headSha) {
@@ -261,6 +291,32 @@ export function Onboarding() {
     } finally {
       setBusy("");
       void loadHistory(repository);
+    }
+  };
+
+  // Test and save server connection
+  const verifyAndSaveServer = async () => {
+    setBusy("save");
+    setError("");
+    try {
+      const data = await post<{ target: SavedDeploymentTarget }>(
+        "/api/deploy/on-premise",
+        {
+          repository,
+          host: serverHost,
+          sshPort: Number(sshPort),
+          username: sshUsername,
+          hostPort: Number(hostPort),
+          containerPort: Number(containerPort),
+          saveOnly: true,
+        },
+      );
+      setSavedTarget(data.target);
+      setShowEditServer(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "서버 연결 확인에 실패했습니다.");
+    } finally {
+      setBusy("");
     }
   };
 
@@ -414,81 +470,205 @@ export function Onboarding() {
               {!savedTarget || showEditServer ? (
                 <div>
                   <h3 className="card-title">
-                    {savedTarget ? "서버 정보 변경" : "새 서버 정보를 입력하세요!"}
+                    {savedTarget ? "서버 접속 정보 변경" : "배포 대상 온프레미스 서버 설정"}
                   </h3>
                   <p className="card-desc">
                     {savedTarget
-                      ? "연결 정보를 수정한 후 다시 등록합니다."
-                      : "이 저장소에 등록된 온프레미스 서버가 없습니다. 최초 1회만 입력하면 됩니다."}
+                      ? "서버 접속 정보를 수정한 후 다시 등록합니다."
+                      : "비밀번호 입력 없이 안전하게 배포할 수 있도록 아래 순서대로 진행해 주세요."}
                   </p>
 
-                  <div className="form-group">
-                    <label className="form-label">서버 IP 또는 주소</label>
-                    <input
-                      className="form-input"
-                      value={serverHost}
-                      onChange={(e) => setServerHost(e.target.value)}
-                      placeholder="예: 192.168.1.100"
-                    />
+                  {/* 1단계: 서버에 인증키 등록 */}
+                  <div style={{ marginBottom: "22px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+                      <span style={{
+                        background: "var(--primary)",
+                        color: "white",
+                        borderRadius: "99px",
+                        width: "20px",
+                        height: "20px",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: "12px",
+                        fontWeight: 800,
+                      }}>1</span>
+                      <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)" }}>
+                        서버 터미널에 인증키 등록
+                      </span>
+                    </div>
+
+                    {/* SSH 공개키 원클릭 복사 카드 */}
+                    <div
+                      onClick={() => void copySetupCommand()}
+                      style={{
+                        background: copiedCommand ? "#e6fcf5" : "#f8f9fa",
+                        border: `1.5px solid ${copiedCommand ? "#20c997" : "#e9ecef"}`,
+                        borderRadius: "14px",
+                        padding: "14px 18px",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        transition: "all 0.2s ease",
+                        userSelect: "none",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0, flex: 1 }}>
+                        <div
+                          style={{
+                            width: "36px",
+                            height: "36px",
+                            borderRadius: "10px",
+                            background: copiedCommand ? "#20c997" : "#212529",
+                            color: "white",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: "16px",
+                            flexShrink: 0,
+                            transition: "background 0.2s ease",
+                          }}
+                        >
+                          {copiedCommand ? "✓" : "🔑"}
+                        </div>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)" }}>
+                            {copiedCommand ? "명령어가 클립보드에 복사되었습니다!" : "등록 명령어 복사하기"}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: "12px",
+                              color: "var(--text-muted)",
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              fontFamily: "monospace",
+                              marginTop: "2px",
+                            }}
+                          >
+                            $ mkdir -p ~/.ssh && echo &quot;ssh-rsa AAA...&quot; &gt;&gt; ~/.ssh/authorized_keys
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="pill-btn"
+                        style={{
+                          flexShrink: 0,
+                          marginLeft: "12px",
+                          background: copiedCommand ? "#20c997" : "white",
+                          color: copiedCommand ? "white" : "var(--text-main)",
+                          borderColor: copiedCommand ? "#20c997" : "var(--border)",
+                          fontWeight: 700,
+                        }}
+                      >
+                        {copiedCommand ? "✓ 복사 완료" : "클릭하여 복사"}
+                      </button>
+                    </div>
+                    <p style={{ fontSize: "11px", color: "var(--text-sub)", margin: "6px 0 0 4px" }}>
+                      * 복사한 명령어를 배포 대상 서버 터미널에 1회 실행하면 공개키가 <code>~/.ssh/authorized_keys</code>에 자동 등록됩니다.
+                    </p>
                   </div>
 
-                  <div className="form-row">
+                  {/* 2단계: 서버 접속 정보 입력 */}
+                  <div style={{ marginBottom: "20px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                      <span style={{
+                        background: "var(--primary)",
+                        color: "white",
+                        borderRadius: "99px",
+                        width: "20px",
+                        height: "20px",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: "12px",
+                        fontWeight: 800,
+                      }}>2</span>
+                      <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)" }}>
+                        서버 접속 정보 입력
+                      </span>
+                    </div>
+
                     <div className="form-group">
-                      <label className="form-label">SSH 사용자</label>
+                      <label className="form-label">서버 IP 또는 호스트 주소</label>
                       <input
                         className="form-input"
-                        value={sshUsername}
-                        onChange={(e) => setSshUsername(e.target.value)}
-                        placeholder="예: ubuntu"
+                        value={serverHost}
+                        onChange={(e) => setServerHost(e.target.value)}
+                        placeholder="예: 192.168.1.100"
                       />
                     </div>
-                    <div className="form-group">
-                      <label className="form-label">SSH 포트</label>
-                      <input
-                        className="form-input"
-                        type="number"
-                        value={sshPort}
-                        onChange={(e) => setSshPort(e.target.value)}
-                        placeholder="22"
-                      />
+
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label className="form-label">SSH 사용자명</label>
+                        <input
+                          className="form-input"
+                          value={sshUsername}
+                          onChange={(e) => setSshUsername(e.target.value)}
+                          placeholder="예: ubuntu"
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">SSH 포트</label>
+                        <input
+                          className="form-input"
+                          type="number"
+                          value={sshPort}
+                          onChange={(e) => setSshPort(e.target.value)}
+                          placeholder="22"
+                        />
+                      </div>
                     </div>
                   </div>
 
-                  <div className="form-group">
-                    <label className="form-label">SSH 비밀번호</label>
-                    <input
-                      className="form-input"
-                      type="password"
-                      autoComplete="off"
-                      value={sshPassword}
-                      onChange={(e) => setSshPassword(e.target.value)}
-                      placeholder="비밀번호 입력"
-                    />
+                  {/* 3단계: 서비스 포트 설정 */}
+                  <div style={{ marginBottom: "16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                      <span style={{
+                        background: "#adb5bd",
+                        color: "white",
+                        borderRadius: "99px",
+                        width: "20px",
+                        height: "20px",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: "12px",
+                        fontWeight: 800,
+                      }}>3</span>
+                      <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-main)" }}>
+                        서비스 포트 설정 (선택)
+                      </span>
+                    </div>
+
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label className="form-label">외부 접속 포트</label>
+                        <input
+                          className="form-input"
+                          type="number"
+                          value={hostPort}
+                          onChange={(e) => setHostPort(e.target.value)}
+                          placeholder="8000"
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">컨테이너 포트</label>
+                        <input
+                          className="form-input"
+                          type="number"
+                          value={containerPort}
+                          onChange={(e) => setContainerPort(e.target.value)}
+                          placeholder="8000"
+                        />
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label className="form-label">외부 접속 포트</label>
-                      <input
-                        className="form-input"
-                        type="number"
-                        value={hostPort}
-                        onChange={(e) => setHostPort(e.target.value)}
-                        placeholder="8000"
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">컨테이너 포트</label>
-                      <input
-                        className="form-input"
-                        type="number"
-                        value={containerPort}
-                        onChange={(e) => setContainerPort(e.target.value)}
-                        placeholder="8000"
-                      />
-                    </div>
-                  </div>
-
+                  {/* 액션 버튼 */}
                   <div style={{ display: "flex", gap: "10px", marginTop: "24px" }}>
                     {showEditServer && (
                       <button
@@ -499,12 +679,18 @@ export function Onboarding() {
                       </button>
                     )}
                     <button
+                      className="btn btn-secondary"
+                      disabled={!serverHost || !sshPort || !sshUsername || busy !== ""}
+                      onClick={() => void verifyAndSaveServer()}
+                    >
+                      {busy === "save" ? "연결 확인 중…" : "서버 연결 확인"}
+                    </button>
+                    <button
                       className="btn btn-primary"
                       disabled={
                         !serverHost ||
                         !sshPort ||
                         !sshUsername ||
-                        !sshPassword ||
                         busy !== ""
                       }
                       onClick={() => void deploy(false)}

@@ -1,10 +1,11 @@
 import "server-only";
 
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { db } from "@/lib/db";
 import { ensureProject, findProject } from "@/lib/projects";
+import { generateSshKeyPair } from "./ssh-keygen";
 
 export type DeploymentConnection = {
   host: string;
@@ -200,4 +201,69 @@ async function removeLegacyServer(installationId: number, repository: string): P
   if (!(id in store)) return;
   delete store[id];
   await writeFile(legacyStorePath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+}
+
+type StoredSshKey = {
+  publicKey: string;
+  setupCommand: string;
+  credential: EncryptedValue;
+};
+
+type KeyStore = Record<string, StoredSshKey>;
+
+const storeDirectory = path.join(process.cwd(), ".sbsb-data");
+const keyStorePath = path.join(storeDirectory, "ssh-keys.json");
+let writeQueue: Promise<void> = Promise.resolve();
+
+async function readKeyStore(): Promise<KeyStore> {
+  try {
+    return JSON.parse(await readFile(keyStorePath, "utf8")) as KeyStore;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
+  }
+}
+
+async function writeKeyStore(store: KeyStore): Promise<void> {
+  await mkdir(storeDirectory, { recursive: true, mode: 0o700 });
+  const temporaryPath = `${keyStorePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+  await rename(temporaryPath, keyStorePath);
+}
+
+export async function getOrCreateRepositorySshKey(
+  installationId: number,
+  repository: string,
+): Promise<{ publicKey: string; setupCommand: string; privateKey: string }> {
+  await writeQueue;
+  const id = recordId(installationId, repository);
+  const store = await readKeyStore();
+  if (store[id]) {
+    const credential = decrypt<{ privateKey: string }>(store[id].credential);
+    return {
+      publicKey: store[id].publicKey,
+      setupCommand: store[id].setupCommand,
+      privateKey: credential.privateKey,
+    };
+  }
+
+  const generated = generateSshKeyPair(`sbsb-deploy@${repository}`);
+  const credential = encrypt({ privateKey: generated.privateKey });
+
+  writeQueue = writeQueue.then(async () => {
+    const s = await readKeyStore();
+    s[id] = {
+      publicKey: generated.publicKey,
+      setupCommand: generated.setupCommand,
+      credential,
+    };
+    await writeKeyStore(s);
+  });
+  await writeQueue;
+
+  return {
+    publicKey: generated.publicKey,
+    setupCommand: generated.setupCommand,
+    privateKey: generated.privateKey,
+  };
 }

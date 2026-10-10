@@ -4,6 +4,7 @@ import { apiError } from "@/lib/api";
 import {
   deleteDeploymentConnection,
   getDeploymentConnection,
+  getOrCreateRepositorySshKey,
   getSavedDeploymentTarget,
   saveDeploymentConnection,
   type DeploymentConnection,
@@ -29,14 +30,12 @@ export const maxDuration = 300;
 
 const connectionSchema = z.object({
   host: z.string().trim().min(1).max(253).regex(/^[A-Za-z0-9._:-]+$/),
-  sshPort: z.coerce.number().int().min(1).max(65_535),
+  sshPort: z.coerce.number().int().min(1).max(65_535).default(22),
   username: z.string().trim().min(1).max(32).regex(/^[a-z_][a-z0-9_-]*[$]?$/i),
   password: z.string().max(1_024).optional(),
   privateKey: z.string().max(32_768).optional(),
-  hostPort: z.coerce.number().int().min(1).max(65_535),
-  containerPort: z.coerce.number().int().min(1).max(65_535),
-}).refine((value) => Boolean(value.password?.length || value.privateKey?.length), {
-  message: "SSH password or private key is required.",
+  hostPort: z.coerce.number().int().min(1).max(65_535).default(8000),
+  containerPort: z.coerce.number().int().min(1).max(65_535).default(8000),
 });
 
 const requestSchema = z.object({
@@ -94,16 +93,40 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     // If the user only wants to register/test the server connection without deploying yet:
     if (body.saveOnly) {
-      const connection = connectionSchema.parse(body);
+      let key = body.privateKey;
+      if (!key && !body.password) {
+        const keyInfo = await getOrCreateRepositorySshKey(installationId, body.repository);
+        key = keyInfo.privateKey;
+      }
+      const raw = connectionSchema.parse(body);
+      const connection: DeploymentConnection = {
+        ...raw,
+        privateKey: key,
+      };
       await testSshConnection(connection);
       const target = await saveDeploymentConnection(installationId, body.repository, connection);
       return NextResponse.json({ target, verified: true });
     }
 
-    const connection: DeploymentConnection = body.useSavedConnection
-      ? await getDeploymentConnection(installationId, body.repository)
-        ?? (() => { throw new Error("저장된 배포 서버가 없습니다. 서버 정보를 먼저 입력해 주세요."); })()
-      : connectionSchema.parse(body);
+    let connection: DeploymentConnection;
+    if (body.useSavedConnection) {
+      const saved = await getDeploymentConnection(installationId, body.repository);
+      if (!saved) {
+        throw new Error("저장된 배포 서버가 없습니다. 서버 정보를 먼저 입력해 주세요.");
+      }
+      connection = saved;
+    } else {
+      let key = body.privateKey;
+      if (!key && !body.password) {
+        const keyInfo = await getOrCreateRepositorySshKey(installationId, body.repository);
+        key = keyInfo.privateKey;
+      }
+      const raw = connectionSchema.parse(body);
+      connection = {
+        ...raw,
+        privateKey: key,
+      };
+    }
 
     const rollback = body.rollbackOf
       ? await resolveRollback(installationId, body.repository, body.rollbackOf)
