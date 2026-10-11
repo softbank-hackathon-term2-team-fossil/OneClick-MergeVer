@@ -62,7 +62,15 @@ RUN apt-get update \
     && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip" -o /tmp/awscliv2.zip \
     && unzip -q /tmp/awscliv2.zip -d /tmp \
     && /tmp/aws/install \
-    && rm -rf /tmp/aws /tmp/awscliv2.zip /var/lib/apt/lists/*
+    && case "$TARGETARCH" in \
+         amd64) TF_ARCH=amd64 ;; \
+         arm64) TF_ARCH=arm64 ;; \
+         *) echo "Unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL "https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_${TF_ARCH}.zip" -o /tmp/terraform.zip \
+    && unzip -q /tmp/terraform.zip -d /usr/local/bin \
+    && chmod +x /usr/local/bin/terraform \
+    && rm -rf /tmp/aws /tmp/awscliv2.zip /tmp/terraform.zip /var/lib/apt/lists/*
 
 RUN corepack enable && corepack prepare pnpm@11.19.0 --activate
 
