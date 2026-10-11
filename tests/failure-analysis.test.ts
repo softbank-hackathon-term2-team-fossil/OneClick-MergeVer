@@ -90,9 +90,25 @@ describe("parseAnalysis", () => {
     expect(result.note).toContain("검증을 통과하지 못해");
   });
 
-  it("rejects answers that are not the expected JSON", () => {
-    expect(() => parseAnalysis("I cannot help with that")).toThrow(/could not be understood/);
-    expect(() => parseAnalysis(JSON.stringify({ summary: "only a summary" }))).toThrow(/could not be understood/);
+  it("keeps the raw answer when it is not the expected JSON instead of failing", () => {
+    const plain = parseAnalysis("I cannot help with that");
+    expect(plain.cause).toBe("I cannot help with that");
+    expect(plain.dockerfile).toBeNull();
+    expect(plain.note).toContain("JSON이 아니어서 원문을 표시");
+
+    const partial = parseAnalysis(JSON.stringify({ summary: "only a summary" }));
+    expect(partial.summary).toContain("구조화된 분석 형식으로 응답하지 않았습니다");
+    expect(partial.cause).toContain("only a summary");
+  });
+
+  it("limits the preserved raw answer to its last 2000 characters", () => {
+    const result = parseAnalysis(`${"a".repeat(5_000)}END`);
+    expect(result.cause).toHaveLength(2_000);
+    expect(result.cause.endsWith("END")).toBe(true);
+  });
+
+  it("still throws when the answer is empty", () => {
+    expect(() => parseAnalysis("   ")).toThrow(/could not be understood/);
   });
 });
 
