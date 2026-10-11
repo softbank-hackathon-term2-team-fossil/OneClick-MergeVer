@@ -21,9 +21,11 @@ import {
   dockerHubPullCredential,
   dockerHubTag,
 } from "@/lib/dockerhub";
+import { planOnPremiseApp } from "@/lib/database/plan";
 import { getInstallationClient, parseRepository } from "@/lib/github";
 import { getAppEnv } from "@/lib/env-store";
-import { deployToOnPremise, testSshConnection } from "@/lib/on-premise-deployment";
+import { appIdentifier, deployToOnPremise, removeDataStack, testSshConnection } from "@/lib/on-premise-deployment";
+import { ensureProject } from "@/lib/projects";
 import { requireInstallationId } from "@/lib/session";
 
 export const runtime = "nodejs";
@@ -79,6 +81,11 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
     const installationId = requireInstallationId(request);
     const repository = request.nextUrl.searchParams.get("repository") ?? "";
     await verifyRepositoryAccess(installationId, repository);
+    // Only on explicit request: the app's database containers and their volumes are deleted too.
+    if (request.nextUrl.searchParams.get("purgeData") === "true") {
+      const connection = await getDeploymentConnection(installationId, repository);
+      if (connection) await removeDataStack(connection, appIdentifier(repository));
+    }
     await deleteDeploymentConnection(installationId, repository);
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -136,6 +143,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     await assertDockerHubArtifact(body.repository, imageTag);
     const credential = dockerHubPullCredential();
     const image = dockerHubTag(body.repository, imageTag);
+    const project = await ensureProject(installationId, body.repository);
+    const appId = appIdentifier(body.repository);
+    const plan = await planOnPremiseApp(project.id, appId, await getAppEnv(installationId, body.repository));
     const record = await beginDeployment({
       installationId,
       repository: body.repository,
@@ -144,17 +154,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       image,
       destination: `${connection.host}:${connection.hostPort}`,
       rollbackOf: rollback?.id,
+      databases: plan.databases,
     });
     let logs: string[];
     let publicUrl: string | undefined;
     try {
       ({ logs, publicUrl } = await deployToOnPremise({
         ...connection,
+        appId,
         image,
         registry: credential.registry,
         registryUsername: credential.username,
         registryPassword: credential.password,
-        env: await getAppEnv(installationId, body.repository),
+        appEnv: plan.appEnv,
+        dataStack: plan.dataStack,
       }));
     } catch (error) {
       await failDeployment(record.id, error);

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 
 // Application environment variables (API keys, settings) saved per repository and passed to the container
 // on every deployment. Values are write-only: after saving, only the names are shown.
-export function EnvVars({ repository }: { repository: string }) {
+// onChange lets the database panel re-check which databases the user now connects to themselves.
+export function EnvVars({ repository, onChange }: { repository: string; onChange?: () => void }) {
   const [names, setNames] = useState<string[]>([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -42,6 +43,7 @@ export function EnvVars({ repository }: { repository: string }) {
       setNames(data.names);
       setText("");
       setMessage("저장했습니다. 다음 배포부터 컨테이너에 전달됩니다.");
+      onChange?.();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "저장에 실패했습니다.");
     } finally {

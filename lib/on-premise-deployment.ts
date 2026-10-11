@@ -2,9 +2,13 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { Client, type ConnectConfig } from "ssh2";
-import { dockerEnvFlags, type AppEnv } from "@/lib/app-env";
+import type { DataStack } from "@/lib/database/stack";
+import { dataStackScript, encodeEnvFile, removeDataStackScript } from "@/lib/database/stack-script";
+import { shellQuote } from "@/lib/shell";
 
 type DeploymentInput = {
+  /** Names the app's containers, network and data stack on the server: see appIdentifier */
+  appId: string;
   host: string;
   sshPort: number;
   username: string;
@@ -16,8 +20,10 @@ type DeploymentInput = {
   registry: string;
   registryUsername: string;
   registryPassword: string;
-  // Application environment variables passed to the app container (never logged).
-  env?: AppEnv;
+  /** Variables for the app container: database connections and the user's own values */
+  appEnv?: Record<string, string>;
+  /** The app's databases, run as a separate compose project that outlives app swaps */
+  dataStack?: DataStack;
 };
 
 export type ConnectionTestInput = {
@@ -28,12 +34,22 @@ export type ConnectionTestInput = {
   privateKey?: string;
 };
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'"'"'`)}'`;
+const shortHash = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 12);
+
+/** One id per GitHub repository, so several apps can share a server without touching each other. */
+export function appIdentifier(repository: string): string {
+  return shortHash(repository.toLowerCase());
 }
 
-function appIdentifier(image: string): string {
-  return createHash("sha256").update(image.split(":")[0]).digest("hex").slice(0, 12);
+// The id used before: the image repository, which every SBSB app pushes to, so all apps shared it.
+// Only kept to clean up containers deployed under it.
+export function legacyAppIdentifier(image: string): string {
+  return shortHash(image.split(":")[0]);
+}
+
+/** The Docker network an app's containers (and its databases) share on the server */
+export function appNetwork(appId: string): string {
+  return `sbsb-net-${appId}`;
 }
 
 function connect(config: ConnectConfig): Promise<Client> {
@@ -103,26 +119,92 @@ export type OnPremiseDeploymentResult = {
   publicUrl?: string;
 };
 
-export async function deployToOnPremise(input: DeploymentInput): Promise<OnPremiseDeploymentResult> {
-  const auth = input.privateKey
-    ? { privateKey: input.privateKey }
-    : { password: input.password };
-  const client = await connect({
-    host: input.host,
-    port: input.sshPort,
-    username: input.username,
-    readyTimeout: 20_000,
-    keepaliveInterval: 5_000,
-    ...auth,
-  });
+type ScriptInput = Pick<DeploymentInput, "appId" | "image" | "registry" | "registryUsername" | "hostPort" | "containerPort"> & {
+  withDataStack: boolean;
+};
 
-  const appId = appIdentifier(input.image);
-  const netName = `sbsb-net-${appId}`;
+// Secrets reach the script on stdin, one line each, so they never show up in `ps` or shell history.
+// Order: registry password, app env file, data stack env file, data stack compose file (base64).
+export function deploymentStdin(input: { registryPassword: string; appEnv: Record<string, string>; dataStack?: DataStack }): string {
+  const base64 = (value: string) => Buffer.from(value).toString("base64");
+  return [
+    input.registryPassword,
+    base64(encodeEnvFile(input.appEnv)),
+    input.dataStack ? base64(encodeEnvFile(input.dataStack.env)) : "",
+    input.dataStack ? base64(input.dataStack.compose) : "",
+  ].join("\n") + "\n";
+}
+
+// An SBSB proxy is named sbsb-proxy-<app id>; the id names the rest of that app's containers.
+const SBSB_PROXY = "sbsb-proxy-[0-9a-f]{12}";
+
+// Fails before anything changes when another container or program holds the host port.
+// Its own proxy (a redeploy) and the previous id's proxy (replaced by this deployment) are fine.
+// Another SBSB app's proxy is fine too: that app is stopped later (otherAppEvictionScript).
+function hostPortCheckScript(hostPort: number, legacyProxyName: string): string {
+  return `
+PORT_EVICT=""
+if [ "$PROXY_RUNNING" != "true" ]; then
+  PORT_HOLDERS="$(docker ps --filter publish=${hostPort} --format '{{.Names}}' | grep -vxF ${shellQuote(legacyProxyName)} || true)"
+  PORT_USERS="$(printf '%s\\n' "$PORT_HOLDERS" | grep -vxE '${SBSB_PROXY}' | grep -v '^$' || true)"
+  PORT_EVICT="$(printf '%s\\n' "$PORT_HOLDERS" | grep -xE '${SBSB_PROXY}' || true)"
+  if [ -n "$PORT_USERS" ]; then
+    echo "Host port ${hostPort} is already used by another container ($PORT_USERS). Choose a different host port for this app." >&2
+    exit 34
+  fi
+  if [ -n "$PORT_EVICT" ]; then
+    echo "Host port ${hostPort} is used by another SBSB app ($(echo $PORT_EVICT)). It will be stopped once this app is healthy; its databases are kept."
+  elif [ -z "$(docker ps -q --filter name=^/${legacyProxyName}$ --filter publish=${hostPort})" ] && command -v ss >/dev/null 2>&1 \\
+    && [ -n "$(ss -Hltn "( sport = :${hostPort} )" 2>/dev/null)" ]; then
+    echo "Host port ${hostPort} is already used by another program on this server. Choose a different host port for this app." >&2
+    exit 34
+  fi
+fi
+`;
+}
+
+// Runs once the new app is healthy and before its proxy takes the port: stops the other SBSB apps
+// found on the port by hostPortCheckScript. Their databases are kept; they never hold a host port.
+function otherAppEvictionScript(): string {
+  return `
+for OTHER_PROXY in $PORT_EVICT; do
+  OTHER="\${OTHER_PROXY#sbsb-proxy-}"
+  echo "Stopping the other SBSB app on this port (app id $OTHER). Its databases are kept."
+  for NAME in "sbsb-proxy-$OTHER" "sbsb-app-$OTHER-blue" "sbsb-app-$OTHER-green" "sbsb-tunnel-$OTHER" "sbsb-$OTHER"; do
+    docker rm -f "$NAME" >/dev/null 2>&1 || true
+  done
+done
+`;
+}
+
+// Runs once the new app is healthy and before its proxy takes the port, only on the first deploy
+// under the current id. Databases are kept: their data may belong to any app that used the old id.
+function legacyCleanupScript(legacyId: string): string {
+  const names = [`sbsb-proxy-${legacyId}`, `sbsb-app-${legacyId}-blue`, `sbsb-app-${legacyId}-green`, `sbsb-tunnel-${legacyId}`, `sbsb-${legacyId}`];
+  const dataProject = `sbsb-data-${legacyId}`;
+  return `
+if [ "$PROXY_RUNNING" != "true" ]; then
+${names.map((name) => `  if docker inspect ${shellQuote(name)} >/dev/null 2>&1; then
+    echo 'Removing a container deployed under the previous app id: ${name}'
+    docker rm -f ${shellQuote(name)} >/dev/null 2>&1 || true
+  fi`).join("\n")}
+  if [ -n "$(docker ps -aq --filter label=com.docker.compose.project=${dataProject})" ]; then
+    echo 'Database containers from the previous app id (${dataProject}) were kept with their data. They are no longer used by this app.'
+  fi
+fi
+`;
+}
+
+export function buildDeploymentScript(input: ScriptInput): string {
+  const appId = input.appId;
+  const legacyId = legacyAppIdentifier(input.image);
+  const netName = appNetwork(appId);
   const proxyName = `sbsb-proxy-${appId}`;
   const slotBlue = `sbsb-app-${appId}-blue`;
   const slotGreen = `sbsb-app-${appId}-green`;
   const tunnelName = `sbsb-tunnel-${appId}`;
   const legacyName = `sbsb-${appId}`;
+  const legacyProxyName = `sbsb-proxy-${legacyId}`;
 
   // Zero-downtime rolling deployment script:
   // 1. Authenticate & pull target image (and proxy image).
@@ -133,13 +215,20 @@ export async function deployToOnPremise(input: DeploymentInput): Promise<OnPremi
   // 6. Update Nginx proxy config to route traffic to candidate container and reload Nginx seamlessly.
   // 7. Stop and remove previous container only after traffic is successfully switched.
   // 8. Launch Cloudflare Quick Tunnel to provide a public HTTPS URL accessible from anywhere.
-  const script = `set -Eeuo pipefail
+  // With databases, their data stack is brought up (or left as is) between steps 2 and 3.
+  return `set -Eeuo pipefail
 command -v docker >/dev/null || { echo 'Docker is not installed on this server.' >&2; exit 20; }
 docker info >/dev/null 2>&1 || { echo 'The SSH user cannot run Docker. Add the user to the docker group.' >&2; exit 21; }
 
 DOCKER_CONFIG="$(mktemp -d)"
 trap 'rm -rf "$DOCKER_CONFIG"' EXIT
 IFS= read -r REGISTRY_PASSWORD
+IFS= read -r APP_ENV_B64 || true
+IFS= read -r DATA_ENV_B64 || true
+IFS= read -r DATA_COMPOSE_B64 || true
+APP_ENV_FILE="$DOCKER_CONFIG/app.env"
+printf '%s' "$APP_ENV_B64" | base64 -d > "$APP_ENV_FILE"
+chmod 600 "$APP_ENV_FILE"
 printf '%s' "$REGISTRY_PASSWORD" | docker --config "$DOCKER_CONFIG" login ${shellQuote(input.registry)} --username ${shellQuote(input.registryUsername)} --password-stdin >/dev/null
 
 echo 'Pulling application image...'
@@ -149,10 +238,13 @@ echo 'Ensuring reverse proxy and tunnel images...'
 docker pull nginx:alpine >/dev/null 2>&1 || true
 docker pull cloudflare/cloudflared:latest >/dev/null 2>&1 || true
 
+PROXY_RUNNING="$(docker inspect -f '{{.State.Running}}' ${shellQuote(proxyName)} 2>/dev/null || true)"
+${hostPortCheckScript(input.hostPort, legacyProxyName)}
 docker network inspect ${shellQuote(netName)} >/dev/null 2>&1 || docker network create ${shellQuote(netName)}
 
 CONFIG_DIR="$HOME/.sbsb/proxy/${appId}"
 mkdir -p "$CONFIG_DIR"
+${input.withDataStack ? dataStackScript(`sbsb-data-${appId}`, appId) : ""}
 
 CURRENT=""
 if [ "$(docker inspect -f '{{.State.Running}}' ${shellQuote(slotBlue)} 2>/dev/null || true)" = "true" ]; then
@@ -175,7 +267,7 @@ fi
 
 echo "Starting candidate container ($CANDIDATE) alongside existing version..."
 docker rm -f "$CANDIDATE" >/dev/null 2>&1 || true
-docker run -d --name "$CANDIDATE" --network ${shellQuote(netName)} --restart unless-stopped ${dockerEnvFlags(input.env)}${shellQuote(input.image)}
+docker run -d --name "$CANDIDATE" --network ${shellQuote(netName)} --restart unless-stopped --env-file "$APP_ENV_FILE" ${shellQuote(input.image)}
 
 echo "Checking health of new container ($CANDIDATE)..."
 READY=0
@@ -205,7 +297,8 @@ if [ "$READY" -ne 1 ]; then
   docker rm -f "$CANDIDATE" >/dev/null 2>&1 || true
   exit 32
 fi
-
+${legacyId === appId ? "" : legacyCleanupScript(legacyId)}
+${otherAppEvictionScript()}
 cat << EOF > "$CONFIG_DIR/default.conf"
 map \\$http_upgrade \\$connection_upgrade {
     default upgrade;
@@ -289,9 +382,26 @@ else
   echo "Tunnel container status:"
   docker logs --tail 15 ${shellQuote(tunnelName)} 2>&1 || true
 fi`;
+}
 
+function sshAuth(input: ConnectionTestInput) {
+  return input.privateKey ? { privateKey: input.privateKey } : { password: input.password };
+}
+
+export async function deployToOnPremise(input: DeploymentInput): Promise<OnPremiseDeploymentResult> {
+  const client = await connect({
+    host: input.host,
+    port: input.sshPort,
+    username: input.username,
+    readyTimeout: 20_000,
+    keepaliveInterval: 5_000,
+    ...sshAuth(input),
+  });
+
+  const script = buildDeploymentScript({ ...input, withDataStack: Boolean(input.dataStack) });
+  const stdin = deploymentStdin({ registryPassword: input.registryPassword, appEnv: input.appEnv ?? {}, dataStack: input.dataStack });
   try {
-    const output = await execute(client, `bash -lc ${shellQuote(script)}`, `${input.registryPassword}\n`);
+    const output = await execute(client, `bash -lc ${shellQuote(script)}`, stdin);
     const lines = output.split("\n").filter(Boolean);
     const publicUrlLine = lines.find((l) => l.startsWith("SBSB_PUBLIC_URL: "));
     const publicUrl = publicUrlLine ? publicUrlLine.replace("SBSB_PUBLIC_URL: ", "").trim() : undefined;
@@ -305,4 +415,18 @@ fi`;
   }
 }
 
-
+/** Deletes an app's database containers and volumes on its server. Irreversible. */
+export async function removeDataStack(input: ConnectionTestInput, appId: string): Promise<string> {
+  const client = await connect({
+    host: input.host,
+    port: input.sshPort,
+    username: input.username,
+    readyTimeout: 15_000,
+    ...sshAuth(input),
+  });
+  try {
+    return await execute(client, `bash -lc ${shellQuote(removeDataStackScript(`sbsb-data-${appId}`, appId))}`);
+  } finally {
+    client.end();
+  }
+}

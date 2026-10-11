@@ -82,6 +82,29 @@ describe.skipIf(!url)("database integration", () => {
     expect(latest).toMatchObject({ number: 4, trigger: "ROLLBACK", imageTag: sha("a"), current: true });
   });
 
+  it("keeps database passwords encrypted, and plans the on-premises app from them", async () => {
+    const { db, beginDeployment } = await load();
+    const { syncDetectedDatabases, revealDatabasePassword } = await import("../lib/database/store");
+    const { planOnPremiseApp } = await import("../lib/database/plan");
+    const { appIdentifier } = await import("../lib/on-premise-deployment");
+
+    await syncDetectedDatabases(installationId, repository, ["postgres", "redis"]);
+    await syncDetectedDatabases(installationId, repository, ["postgres", "redis"]);
+    const password = await revealDatabasePassword(installationId, repository, "postgres");
+
+    const project = await db().project.findFirstOrThrow({ where: { installationId: BigInt(installationId) } });
+    const rows = await db().projectDatabase.findMany({ where: { projectId: project.id } });
+    expect(rows).toHaveLength(2);
+    expect(JSON.stringify(rows)).not.toContain(password);
+
+    const plan = await planOnPremiseApp(project.id, appIdentifier(repository), { API_KEY: "plain-api-key" });
+    expect(plan.databases).toEqual(["postgres", "redis"]);
+    expect(plan.appEnv).toMatchObject({ API_KEY: "plain-api-key", DATABASE_URL: `postgresql://app:${password}@db:5432/app` });
+
+    const record = await beginDeployment({ installationId, repository, target: "ONPREM", imageTag: sha("a"), image: "sbsb/images:x", databases: plan.databases });
+    expect((await db().deployment.findUniqueOrThrow({ where: { id: record.id } })).databases).toEqual(["postgres", "redis"]);
+  });
+
   it("fails deployments left running when the server restarts", async () => {
     const { beginDeployment, failInterruptedDeployments, listDeployments } = await load();
     await beginDeployment({ installationId, repository, target: "AWS", imageTag: sha("a"), image: "sbsb/images:a" });
