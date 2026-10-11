@@ -42,7 +42,10 @@ locals {
     [
       "#!/bin/bash",
       "set -euo pipefail",
-      "dnf install -y docker",
+      # Amazon Linux 2023 minimal images may not include Python.  The
+      # bootstrap script uses python3 to parse the Secrets Manager JSON before
+      # starting the container, so install it explicitly with Docker.
+      "dnf install -y docker python3",
       "systemctl enable --now docker",
       "read_secret() { aws secretsmanager get-secret-value --region ${var.region} --secret-id \"$1\" --query SecretString --output text; }",
       "field() { python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' \"$1\"; }",
