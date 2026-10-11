@@ -21,6 +21,15 @@ provider "azurerm" {
   ]
 }
 
+variable "resource_group" {
+  type        = string
+  description = "기존 Azure 리소스 그룹. 사이트 서비스 주체가 이미 관리할 수 있는 그룹을 사용한다."
+  validation {
+    condition     = can(regex("^[A-Za-z0-9._()-]{1,90}$", var.resource_group)) && !endswith(var.resource_group, ".")
+    error_message = "resource_group은 Azure 리소스 그룹 이름이어야 합니다."
+  }
+}
+
 locals {
   name = "sbsb-${var.app_name}"
   tags = { ManagedBy = "sbsb", App = var.app_name }
@@ -49,10 +58,8 @@ locals {
   } : {})
 }
 
-resource "azurerm_resource_group" "this" {
-  name     = local.name
-  location = var.region
-  tags     = local.tags
+data "azurerm_resource_group" "this" {
+  name = var.resource_group
 }
 
 # ---------------------------------------------------------------- 데이터베이스 (선택)

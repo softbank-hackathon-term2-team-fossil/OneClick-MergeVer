@@ -42,7 +42,7 @@ export const ADAPTERS: Record<Cloud, CloudAdapter> = {
       ...(env("ARM_SUBSCRIPTION_ID") || env("SBSB_AZURE_SUBSCRIPTION_ID") ? [] : ["ARM_SUBSCRIPTION_ID"]),
       ...absent("ARM_TENANT_ID", "ARM_CLIENT_ID", "ARM_CLIENT_SECRET"),
     ],
-    variables: () => ({}),
+    variables: () => ({ resource_group: env("SBSB_AZURE_RESOURCE_GROUP") }),
     processEnv: () => ({ ARM_SUBSCRIPTION_ID: env("ARM_SUBSCRIPTION_ID") || env("SBSB_AZURE_SUBSCRIPTION_ID") }),
   },
   aws: {
