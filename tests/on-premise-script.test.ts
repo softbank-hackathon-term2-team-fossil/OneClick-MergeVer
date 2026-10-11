@@ -124,6 +124,22 @@ describe("buildDeploymentScript", () => {
     expect(script).not.toContain(`sbsb-data-${legacy}' down`);
     expect(script).toContain(`com.docker.compose.project=sbsb-data-${legacy}`);
   });
+
+  it("lets another SBSB app's proxy on the host port through, and stops that app only once the new app is healthy", () => {
+    const script = buildDeploymentScript({ ...base, withDataStack: true });
+    // Only names shaped like an SBSB proxy are taken over; anything else still fails the check.
+    expect(script).toContain("grep -xE 'sbsb-proxy-[0-9a-f]{12}'");
+    expect(script).toContain("grep -vxE 'sbsb-proxy-[0-9a-f]{12}'");
+    const evict = script.indexOf("for OTHER_PROXY in $PORT_EVICT");
+    expect(evict).toBeGreaterThan(script.indexOf("READY=1"));
+    expect(evict).toBeLessThan(script.indexOf("Starting reverse proxy"));
+    for (const name of ["sbsb-proxy-$OTHER", "sbsb-app-$OTHER-green", "sbsb-tunnel-$OTHER", "sbsb-$OTHER"]) {
+      expect(script).toContain(`"${name}"`);
+    }
+    // The other app's databases are kept.
+    expect(script).not.toContain("sbsb-data-$OTHER");
+    expect(bashSyntaxOk(script)).toEqual({ ok: true, stderr: "" });
+  });
 });
 
 describe("deploymentStdin", () => {

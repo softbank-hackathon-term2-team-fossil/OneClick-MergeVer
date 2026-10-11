@@ -135,22 +135,45 @@ export function deploymentStdin(input: { registryPassword: string; appEnv: Recor
   ].join("\n") + "\n";
 }
 
+// An SBSB proxy is named sbsb-proxy-<app id>; the id names the rest of that app's containers.
+const SBSB_PROXY = "sbsb-proxy-[0-9a-f]{12}";
+
 // Fails before anything changes when another container or program holds the host port.
 // Its own proxy (a redeploy) and the previous id's proxy (replaced by this deployment) are fine.
+// Another SBSB app's proxy is fine too: that app is stopped later (otherAppEvictionScript).
 function hostPortCheckScript(hostPort: number, legacyProxyName: string): string {
   return `
+PORT_EVICT=""
 if [ "$PROXY_RUNNING" != "true" ]; then
-  PORT_USERS="$(docker ps --filter publish=${hostPort} --format '{{.Names}}' | grep -vxF ${shellQuote(legacyProxyName)} || true)"
+  PORT_HOLDERS="$(docker ps --filter publish=${hostPort} --format '{{.Names}}' | grep -vxF ${shellQuote(legacyProxyName)} || true)"
+  PORT_USERS="$(printf '%s\\n' "$PORT_HOLDERS" | grep -vxE '${SBSB_PROXY}' | grep -v '^$' || true)"
+  PORT_EVICT="$(printf '%s\\n' "$PORT_HOLDERS" | grep -xE '${SBSB_PROXY}' || true)"
   if [ -n "$PORT_USERS" ]; then
     echo "Host port ${hostPort} is already used by another container ($PORT_USERS). Choose a different host port for this app." >&2
     exit 34
   fi
-  if [ -z "$(docker ps -q --filter name=^/${legacyProxyName}$ --filter publish=${hostPort})" ] && command -v ss >/dev/null 2>&1 \\
+  if [ -n "$PORT_EVICT" ]; then
+    echo "Host port ${hostPort} is used by another SBSB app ($(echo $PORT_EVICT)). It will be stopped once this app is healthy; its databases are kept."
+  elif [ -z "$(docker ps -q --filter name=^/${legacyProxyName}$ --filter publish=${hostPort})" ] && command -v ss >/dev/null 2>&1 \\
     && [ -n "$(ss -Hltn "( sport = :${hostPort} )" 2>/dev/null)" ]; then
     echo "Host port ${hostPort} is already used by another program on this server. Choose a different host port for this app." >&2
     exit 34
   fi
 fi
+`;
+}
+
+// Runs once the new app is healthy and before its proxy takes the port: stops the other SBSB apps
+// found on the port by hostPortCheckScript. Their databases are kept; they never hold a host port.
+function otherAppEvictionScript(): string {
+  return `
+for OTHER_PROXY in $PORT_EVICT; do
+  OTHER="\${OTHER_PROXY#sbsb-proxy-}"
+  echo "Stopping the other SBSB app on this port (app id $OTHER). Its databases are kept."
+  for NAME in "sbsb-proxy-$OTHER" "sbsb-app-$OTHER-blue" "sbsb-app-$OTHER-green" "sbsb-tunnel-$OTHER" "sbsb-$OTHER"; do
+    docker rm -f "$NAME" >/dev/null 2>&1 || true
+  done
+done
 `;
 }
 
@@ -275,6 +298,7 @@ if [ "$READY" -ne 1 ]; then
   exit 32
 fi
 ${legacyId === appId ? "" : legacyCleanupScript(legacyId)}
+${otherAppEvictionScript()}
 cat << EOF > "$CONFIG_DIR/default.conf"
 map \\$http_upgrade \\$connection_upgrade {
     default upgrade;
