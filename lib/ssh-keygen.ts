@@ -10,7 +10,7 @@ export type SshKeyPair = {
 };
 
 export function formatSetupCommand(publicKey: string): string {
-  return `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "${publicKey}" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && (command -v docker >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq docker.io && sudo systemctl enable --now docker)) && sudo usermod -aG docker "$USER" 2>/dev/null && echo "✓ 서버 설정 완료: SSH 인증키 등록 및 Docker 준비가 완료되었습니다."`;
+  return `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "${publicKey}" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && (command -v docker >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq docker.io && sudo systemctl enable --now docker)) && (docker compose version >/dev/null 2>&1 || (sudo apt-get update -qq && (sudo apt-get install -y -qq docker-compose-v2 || sudo apt-get install -y -qq docker-compose-plugin))) && sudo usermod -aG docker "$USER" 2>/dev/null && echo "✓ 서버 설정 완료: SSH 인증키 등록 및 Docker·Docker Compose 준비가 완료되었습니다."`;
 }
 
 export function generateSshKeyPair(comment = "sbsb-deploy"): SshKeyPair {

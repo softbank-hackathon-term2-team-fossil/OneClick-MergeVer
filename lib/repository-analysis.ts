@@ -26,6 +26,8 @@ const BUILD_FILES = new Set([
   "go.sum",
   "Cargo.toml",
   "Cargo.lock",
+  // Names the database (datasource provider) for on-premises database setup. No secrets: URLs come from env().
+  "schema.prisma",
 ]);
 
 const ENTRYPOINTS = new Set([

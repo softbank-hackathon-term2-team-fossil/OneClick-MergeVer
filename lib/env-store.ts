@@ -3,7 +3,8 @@ import "server-only";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import { decrypt, encrypt, recordId, type EncryptedValue } from "@/lib/deployment-store";
+import { recordId } from "@/lib/deployment-store";
+import { decrypt, encrypt, type EncryptedValue } from "@/lib/secret-box";
 import { validateAppEnv, type AppEnv } from "@/lib/app-env";
 
 // Environment variables are encrypted at rest with the same key as the saved server credentials.

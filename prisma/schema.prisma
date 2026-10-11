@@ -20,6 +20,8 @@ model Project {
 
   server      Server?
   deployments Deployment[]
+  databases   ProjectDatabase[]
+  envVars     ProjectEnvVar[]
 
   @@unique([installationId, repository])
 }
@@ -81,9 +83,44 @@ model Deployment {
   url                String?
   startedAt          DateTime         @default(now())
   finishedAt         DateTime?
+  databases          String[]         @default([]) // on-premises: managed databases running with this deployment
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@unique([projectId, number])
   @@index([projectId, target, startedAt])
+}
+
+// A database SBSB runs next to the app on its on-premises server (detected at repository analysis).
+// The row outlives detection changes (active=false) so the password always matches the existing volume.
+model ProjectDatabase {
+  id                String   @id @default(cuid())
+  projectId         String
+  kind              String // postgres | mysql | mongo | redis
+  image             String // pinned image the data volume was created with
+  active            Boolean  @default(true)
+  encryptedPassword String // AES-256-GCM, empty plaintext for redis
+  iv                String
+  authTag           String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, kind])
+}
+
+// A variable the user sets for the app container (API keys, or their own DATABASE_URL).
+model ProjectEnvVar {
+  id             String   @id @default(cuid())
+  projectId      String
+  key            String
+  encryptedValue String // AES-256-GCM
+  iv             String
+  authTag        String
+  updatedAt      DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, key])
 }

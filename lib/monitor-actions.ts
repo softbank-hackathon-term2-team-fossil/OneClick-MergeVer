@@ -1,5 +1,6 @@
 import "server-only";
 
+import { planOnPremiseApp } from "@/lib/database/plan";
 import { rollbackCloudRunService } from "@/lib/deploy/cloud-run-target";
 import { serviceNameFor } from "@/lib/deploy/helpers";
 import { beginDeployment, completeDeployment, failDeployment, listDeployments, resolveRollback } from "@/lib/deployment-history";
@@ -7,7 +8,8 @@ import { getDeploymentConnection } from "@/lib/deployment-store";
 import { assertDockerHubArtifact, dockerHubPullCredential, dockerHubTag } from "@/lib/dockerhub";
 import { getAppEnv } from "@/lib/env-store";
 import { httpCheck, isSameServer, MonitorRegistry, type MonitorConfig } from "@/lib/health-monitor";
-import { deployToOnPremise } from "@/lib/on-premise-deployment";
+import { appIdentifier, deployToOnPremise } from "@/lib/on-premise-deployment";
+import { ensureProject } from "@/lib/projects";
 
 // Restores the newest earlier successful on-premises deployment of a fixed commit.
 async function rollbackOnPremise(installationId: number, repository: string): Promise<string> {
@@ -29,6 +31,10 @@ async function rollbackOnPremise(installationId: number, repository: string): Pr
   await assertDockerHubArtifact(repository, rollback.imageTag);
   const credential = dockerHubPullCredential();
   const image = dockerHubTag(repository, rollback.imageTag);
+  // Same app id and databases as a manual deployment, so the rollback keeps the app's data stack.
+  const project = await ensureProject(installationId, repository);
+  const appId = appIdentifier(repository);
+  const plan = await planOnPremiseApp(project.id, appId, await getAppEnv(installationId, repository));
   const record = await beginDeployment({
     installationId,
     repository,
@@ -37,15 +43,18 @@ async function rollbackOnPremise(installationId: number, repository: string): Pr
     image,
     destination: `${connection.host}:${connection.hostPort}`,
     rollbackOf: rollback.id,
+    databases: plan.databases,
   });
   try {
     const { publicUrl } = await deployToOnPremise({
       ...connection,
+      appId,
       image,
       registry: credential.registry,
       registryUsername: credential.username,
       registryPassword: credential.password,
-      env: await getAppEnv(installationId, repository),
+      appEnv: plan.appEnv,
+      dataStack: plan.dataStack,
     });
     const localUrl = `http://${connection.host.includes(":") ? `[${connection.host}]` : connection.host}:${connection.hostPort}`;
     await completeDeployment(record.id, { url: publicUrl || localUrl });

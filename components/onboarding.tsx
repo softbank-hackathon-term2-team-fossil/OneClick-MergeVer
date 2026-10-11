@@ -10,6 +10,7 @@ import type {
   SavedDeploymentTarget,
   WorkflowRunSummary,
 } from "@/lib/types";
+import { DatabasePanel } from "@/components/database-panel";
 import { Deployment } from "@/components/deployment";
 import { InfraProvision } from "@/components/infra-provision";
 import { DeploymentHistory } from "@/components/deployment-history";
@@ -45,6 +46,8 @@ export function Onboarding() {
   const [savedTarget, setSavedTarget] = useState<SavedDeploymentTarget | null>(null);
   const [deployedSha, setDeployedSha] = useState<string | null>(null);
   const [history, setHistory] = useState<DeploymentRecord[]>([]);
+  // Bumped when detected databases or app variables may have changed, to reload the database panel.
+  const [databaseRevision, setDatabaseRevision] = useState(0);
   // The last on-premises deployment error, kept apart from other errors so only it offers AI analysis.
   const [deployFailure, setDeployFailure] = useState<{ message: string; tag?: string } | null>(null);
   const [deployment, setDeployment] = useState<OnPremiseDeployment | null>(null);
@@ -298,6 +301,7 @@ export function Onboarding() {
         branch: targetBranch,
       });
       setAnalysis(data.analysis);
+      setDatabaseRevision((revision) => revision + 1);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "저장소 분석에 실패했습니다.");
     } finally {
@@ -367,6 +371,7 @@ export function Onboarding() {
         branch: targetBranch,
       });
       setAnalysis(analysisData.analysis);
+      setDatabaseRevision((revision) => revision + 1);
 
       // 2. Generate Dockerfile with AI
       setPipelineStep("generating");
@@ -493,10 +498,14 @@ export function Onboarding() {
   // Delete saved server connection
   const deleteServer = async () => {
     if (!confirm("등록된 서버 정보를 삭제하시겠습니까?")) return;
+    // Default is to keep the data: only an explicit second confirmation deletes the database volumes.
+    const purgeData = confirm(
+      "이 앱의 DB 컨테이너와 데이터도 서버에서 함께 삭제할까요? 되돌릴 수 없습니다.\n\n확인: DB 데이터까지 삭제\n취소: 서버 정보만 삭제 (DB 데이터는 서버에 남음)",
+    );
     setBusy("delete");
     setError("");
     try {
-      const query = new URLSearchParams({ repository });
+      const query = new URLSearchParams({ repository, ...(purgeData ? { purgeData: "true" } : {}) });
       await requestJson<{ success: boolean }>(`/api/deploy/on-premise?${query}`, {
         method: "DELETE",
       });
@@ -1573,10 +1582,18 @@ export function Onboarding() {
                   )}
                 </div>
               )}
+
+              {repository && (
+                <DatabasePanel
+                  repository={repository}
+                  refreshKey={databaseRevision}
+                  sshTarget={savedTarget ? { username: savedTarget.username, host: savedTarget.host, sshPort: savedTarget.sshPort } : undefined}
+                />
+              )}
             </div>
           )}
 
-          {repository && <EnvVars repository={repository} />}
+          {repository && <EnvVars repository={repository} onChange={() => setDatabaseRevision((revision) => revision + 1)} />}
           {repository && <HealthMonitor repository={repository} />}
           <DeploymentHistory records={history} busy={Boolean(busy)} onRollback={rollback} />
         </>
