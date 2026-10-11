@@ -395,6 +395,11 @@ resource "aws_appautoscaling_target" "app" {
   scalable_dimension = "ecs:service:DesiredCount"
   min_capacity       = max(1, var.min_instances)
   max_capacity       = max(1, var.min_instances, var.max_instances)
+
+  # The service name is known before ECS finishes creating the service. Make
+  # the ordering explicit so Application Auto Scaling never registers a target
+  # against a service that does not exist yet.
+  depends_on = [aws_ecs_service.app]
 }
 
 resource "aws_appautoscaling_policy" "cpu" {
