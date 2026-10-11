@@ -14,3 +14,13 @@ coverage/
 generated/
 example_project/
 qa.md
+
+# Terraform
+infra/terraform/**/.terraform/
+infra/terraform/**/*.tfstate
+infra/terraform/**/*.tfstate.*
+infra/terraform/**/*.tfvars
+infra/terraform/**/crash.log
+
+# Terraform workspaces (state files)
+.sbsb-terraform/

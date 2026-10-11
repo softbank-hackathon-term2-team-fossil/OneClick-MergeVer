@@ -8,7 +8,6 @@ vi.mock("@/lib/db", () => ({ db: () => state.db }));
 process.env.SBSB_CREDENTIAL_ENCRYPTION_KEY = "test-encryption-key-with-at-least-32-chars!!";
 
 import { databasesForDeploy, listDatabases, revealDatabasePassword, syncDetectedDatabases } from "../lib/database/store";
-import { deleteEnvVar, listEnvVarKeys, readEnvVars, setEnvVar } from "../lib/project-env";
 import { findProject } from "../lib/projects";
 
 const installationId = 42;
@@ -81,34 +80,3 @@ describe("project databases", () => {
   });
 });
 
-describe("project variables", () => {
-  beforeEach(() => {
-    state.db = createFakeDb();
-  });
-
-  it("stores values encrypted and lists only names", async () => {
-    await setEnvVar(installationId, repository, { key: "API_KEY", value: "s3cret" });
-    const keys = await listEnvVarKeys(installationId, repository);
-    expect(keys.map((item) => item.key)).toEqual(["API_KEY"]);
-    expect(JSON.stringify(keys)).not.toContain("s3cret");
-
-    const project = await findProject(installationId, repository);
-    expect(await readEnvVars(project!.id)).toEqual({ API_KEY: "s3cret" });
-  });
-
-  it("overwrites and deletes", async () => {
-    await setEnvVar(installationId, repository, { key: "A", value: "1" });
-    await setEnvVar(installationId, repository, { key: "A", value: "2" });
-    const project = await findProject(installationId, repository);
-    expect(await readEnvVars(project!.id)).toEqual({ A: "2" });
-    await deleteEnvVar(installationId, repository, "A");
-    expect(await readEnvVars(project!.id)).toEqual({});
-  });
-
-  it("rejects names and values an env file cannot carry", async () => {
-    await expect(setEnvVar(installationId, repository, { key: "1BAD", value: "x" })).rejects.toThrow();
-    await expect(setEnvVar(installationId, repository, { key: "BAD-NAME", value: "x" })).rejects.toThrow();
-    await expect(setEnvVar(installationId, repository, { key: "OK", value: "a\nb" })).rejects.toThrow();
-    await expect(setEnvVar(installationId, repository, { key: "OK", value: "x".repeat(4_097) })).rejects.toThrow();
-  });
-});

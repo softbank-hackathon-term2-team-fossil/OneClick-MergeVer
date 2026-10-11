@@ -12,9 +12,13 @@ import type {
 } from "@/lib/types";
 import { DatabasePanel } from "@/components/database-panel";
 import { Deployment } from "@/components/deployment";
+import { InfraProvision } from "@/components/infra-provision";
 import { DeploymentHistory } from "@/components/deployment-history";
-import { EnvVarsPanel } from "@/components/env-vars-panel";
+import { DomainConnect } from "@/components/domain-connect";
+import { EnvVars } from "@/components/env-vars";
+import { HealthMonitor } from "@/components/health-monitor";
 import { FailureAnalysisPanel } from "@/components/failure-analysis";
+import { PrMergeConfirm } from "@/components/pr-merge";
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -32,7 +36,7 @@ export function Onboarding() {
   const [analysis, setAnalysis] = useState<RepositoryAnalysis | null>(null);
   const [setup, setSetup] = useState<GeneratedSetup | null>(null);
   const [dockerfile, setDockerfile] = useState("");
-  const [pullRequest, setPullRequest] = useState<{ number: number; htmlUrl: string; branch: string; merged?: boolean } | null>(null);
+  const [pullRequest, setPullRequest] = useState<{ number: number; htmlUrl: string; branch: string; merged?: boolean; confirmedMerge?: boolean } | null>(null);
   const [pipelineStep, setPipelineStep] = useState<"idle" | "analyzing" | "generating" | "merging" | "completed">("idle");
   const [showAdvancedSetup, setShowAdvancedSetup] = useState(false);
   const [showCiSetup, setShowCiSetup] = useState(false);
@@ -823,15 +827,25 @@ export function Onboarding() {
                     <div style={{ fontSize: "12px", color: "var(--text-sub)", marginTop: "2px" }}>
                       {pullRequest?.merged ? (
                         <span style={{ color: "#099268", fontWeight: 600 }}>
-                          ✓ PR #{pullRequest.number} 생성 및 <code>{branch || "main"}</code> 브랜치 자동 머지 완료! (수동 승인 불필요)
+                          {pullRequest.confirmedMerge
+                            ? <>✓ PR #{pullRequest.number}을 변경 내용 확인 후 <code>{branch || "main"}</code> 브랜치에 머지했습니다.</>
+                            : <>✓ PR #{pullRequest.number} 생성 및 <code>{branch || "main"}</code> 브랜치 자동 머지 완료! (수동 승인 불필요)</>}
                         </span>
                       ) : pullRequest && !pullRequest.merged ? (
-                        <span style={{ color: "#d9480f" }}>
-                          PR #{pullRequest.number} 생성 완료 (저장소 보호 규칙으로 인해 수동 머지가 필요합니다:{" "}
-                          <a href={pullRequest.htmlUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "underline", fontWeight: 700 }}>
-                            GitHub에서 머지하기 ↗
-                          </a>)
-                        </span>
+                        <>
+                          <span style={{ color: "#d9480f" }}>
+                            PR #{pullRequest.number} 생성 완료 (머지 전 확인이 필요합니다. GitHub에서 직접 머지하려면{" "}
+                            <a href={pullRequest.htmlUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "underline", fontWeight: 700 }}>
+                              여기 ↗
+                            </a>)
+                          </span>
+                          <PrMergeConfirm
+                            repository={repository}
+                            pullNumber={pullRequest.number}
+                            htmlUrl={pullRequest.htmlUrl}
+                            onMerged={() => setPullRequest((current) => (current ? { ...current, merged: true, confirmedMerge: true } : current))}
+                          />
+                        </>
                       ) : pipelineStep === "merging" ? (
                         "GitHub Actions 워크플로우 커밋 후 main 브랜치로 자동 머지하고 있습니다…"
                       ) : (
@@ -1135,11 +1149,18 @@ export function Onboarding() {
 
           {/* CLOUD TAB CONTENT */}
           {selectedInfra === "cloud" && (
-            <Deployment
-              repository={repository}
-              branch={run?.branch || selectedRepository?.defaultBranch || ""}
-              onDeployed={() => void loadHistory(repository)}
-            />
+            <>
+              <Deployment
+                repository={repository}
+                branch={run?.branch || selectedRepository?.defaultBranch || ""}
+                onDeployed={() => void loadHistory(repository)}
+              />
+              <InfraProvision
+                repository={repository}
+                branch={run?.branch || selectedRepository?.defaultBranch || ""}
+                onDeployed={() => void loadHistory(repository)}
+              />
+            </>
           )}
 
           {/* ON-PREMISE TAB CONTENT */}
@@ -1508,6 +1529,8 @@ export function Onboarding() {
                     </button>
                   </div>
 
+                  <DomainConnect repository={repository} />
+
                   {/* DETAILS ACCORDION */}
                   {showDetails && (
                     <div className="detail-box">
@@ -1561,18 +1584,17 @@ export function Onboarding() {
               )}
 
               {repository && (
-                <>
-                  <DatabasePanel
-                    repository={repository}
-                    refreshKey={databaseRevision}
-                    sshTarget={savedTarget ? { username: savedTarget.username, host: savedTarget.host, sshPort: savedTarget.sshPort } : undefined}
-                  />
-                  <EnvVarsPanel repository={repository} onChange={() => setDatabaseRevision((revision) => revision + 1)} />
-                </>
+                <DatabasePanel
+                  repository={repository}
+                  refreshKey={databaseRevision}
+                  sshTarget={savedTarget ? { username: savedTarget.username, host: savedTarget.host, sshPort: savedTarget.sshPort } : undefined}
+                />
               )}
             </div>
           )}
 
+          {repository && <EnvVars repository={repository} onChange={() => setDatabaseRevision((revision) => revision + 1)} />}
+          {repository && <HealthMonitor repository={repository} />}
           <DeploymentHistory records={history} busy={Boolean(busy)} onRollback={rollback} />
         </>
       )}

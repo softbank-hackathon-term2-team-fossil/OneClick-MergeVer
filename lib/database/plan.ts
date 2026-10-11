@@ -1,7 +1,6 @@
 import "server-only";
 
 import { appNetwork } from "@/lib/on-premise-deployment";
-import { readEnvVars } from "@/lib/project-env";
 import type { DatabaseKind } from "./detect";
 import { createDataStack, type DataStack, managedDatabases } from "./stack";
 import { databasesForDeploy } from "./store";
@@ -14,9 +13,11 @@ export type OnPremiseAppPlan = {
   databases: DatabaseKind[];
 };
 
-/** What an on-premises deployment of the app `appId` needs besides the image: its databases and variables. */
-export async function planOnPremiseApp(projectId: string, appId: string): Promise<OnPremiseAppPlan> {
-  const userEnv = await readEnvVars(projectId);
+/**
+ * What an on-premises deployment of the app `appId` needs besides the image: its databases and variables.
+ * `userEnv` holds the user's own variables (see env-store); one naming a database switches that database off.
+ */
+export async function planOnPremiseApp(projectId: string, appId: string, userEnv: Record<string, string>): Promise<OnPremiseAppPlan> {
   const detected = await databasesForDeploy(projectId);
   const keep = new Set(managedDatabases(detected.map((database) => database.kind), Object.keys(userEnv)));
   const databases = detected.filter((database) => keep.has(database.kind));

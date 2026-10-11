@@ -23,6 +23,7 @@ import {
 } from "@/lib/dockerhub";
 import { planOnPremiseApp } from "@/lib/database/plan";
 import { getInstallationClient, parseRepository } from "@/lib/github";
+import { getAppEnv } from "@/lib/env-store";
 import { appIdentifier, deployToOnPremise, removeDataStack, testSshConnection } from "@/lib/on-premise-deployment";
 import { ensureProject } from "@/lib/projects";
 import { requireInstallationId } from "@/lib/session";
@@ -144,7 +145,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const image = dockerHubTag(body.repository, imageTag);
     const project = await ensureProject(installationId, body.repository);
     const appId = appIdentifier(body.repository);
-    const plan = await planOnPremiseApp(project.id, appId);
+    const plan = await planOnPremiseApp(project.id, appId, await getAppEnv(installationId, body.repository));
     const record = await beginDeployment({
       installationId,
       repository: body.repository,

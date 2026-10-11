@@ -27,7 +27,7 @@ export type SavedDeploymentTarget = Omit<DeploymentConnection, "password" | "pri
 type LegacyStore = Record<string, { target: SavedDeploymentTarget; credential: EncryptedValue }>;
 const legacyStorePath = path.join(process.cwd(), ".sbsb-data", "deployments.json");
 
-function recordId(installationId: number, repository: string): string {
+export function recordId(installationId: number, repository: string): string {
   return createHash("sha256")
     .update(`${installationId}:${repository.toLowerCase()}`)
     .digest("hex");

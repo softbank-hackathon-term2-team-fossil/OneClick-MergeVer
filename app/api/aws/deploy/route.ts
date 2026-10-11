@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { accountRegion, deployToInstance, resolveTarget } from "@/lib/aws-deploy";
+import { getAppEnv } from "@/lib/env-store";
 import { resolveDeployImage, type DeployEvent } from "@/lib/deploy-image";
 import { beginDeployment, completeDeployment, failDeployment } from "@/lib/deployment-history";
 import { requireInstallationId } from "@/lib/session";
@@ -43,7 +44,15 @@ export async function POST(request: NextRequest): Promise<Response> {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const emit = (event: DeployEvent) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+      let closed = false;
+      const emit = (event: DeployEvent) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        } catch {
+          closed = true;
+        }
+      };
       let cleanup: () => Promise<void> = async () => undefined;
       let recordId: string | undefined;
       try {
@@ -65,7 +74,9 @@ export async function POST(request: NextRequest): Promise<Response> {
         emit({ phase: "instance", message: input.mode === "new" ? "새 EC2를 생성하는 중" : "선택한 EC2를 확인하는 중" });
         const instance = await resolveTarget(region, { ...input, containerPort: prepared.containerPort });
         emit({ phase: "deploy", message: `EC2 ${instance.InstanceId}가 Docker Hub에서 이미지를 받아 실행하는 중`, instanceId: instance.InstanceId });
-        const url = await deployToInstance(region, instance, prepared.image, prepared.containerPort);
+        // Saved application environment variables only exist for repositories (GitHub builds).
+        const appEnv = input.source === "github" ? await getAppEnv(requireInstallationId(request), input.repository) : undefined;
+        const url = await deployToInstance(region, instance, prepared.image, prepared.containerPort, appEnv);
         if (recordId) await completeDeployment(recordId, { url, destination: instance.InstanceId });
         emit({ phase: "complete", message: "배포가 완료되었습니다.", instanceId: instance.InstanceId, url });
       } catch (error) {
@@ -73,9 +84,13 @@ export async function POST(request: NextRequest): Promise<Response> {
         emit({ phase: "error", message: publicCloudError(error) });
       } finally {
         await cleanup();
-        controller.close();
+        if (!closed) {
+          closed = true;
+          controller.close();
+        }
       }
     },
+    cancel() {},
   });
   return new Response(stream, { headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store" } });
 }

@@ -4,8 +4,8 @@ import { apiError } from "@/lib/api";
 import { DATABASE_KINDS } from "@/lib/database/detect";
 import { connectionVariableNames, managedDatabases } from "@/lib/database/stack";
 import { listDatabases, revealDatabasePassword } from "@/lib/database/store";
+import { getAppEnv } from "@/lib/env-store";
 import { getInstallationClient, parseRepository } from "@/lib/github";
-import { listEnvVarKeys } from "@/lib/project-env";
 import { requireInstallationId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +23,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const repository = request.nextUrl.searchParams.get("repository") ?? "";
     await verifyRepositoryAccess(installationId, repository);
     const databases = await listDatabases(installationId, repository);
-    const userKeys = (await listEnvVarKeys(installationId, repository)).map((item) => item.key);
+    const userKeys = Object.keys(await getAppEnv(installationId, repository));
     const managed = managedDatabases(databases.map((database) => database.kind), userKeys);
     return NextResponse.json({
       databases: databases.map((database) => ({ ...database, managed: managed.includes(database.kind) })),

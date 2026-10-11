@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { azureAccount, deployAzureVm, resolveAzureVm } from "@/lib/azure-deploy";
+import { getAppEnv } from "@/lib/env-store";
 import { resolveDeployImage, type DeployEvent } from "@/lib/deploy-image";
 import { beginDeployment, completeDeployment, failDeployment } from "@/lib/deployment-history";
 import { requireInstallationId } from "@/lib/session";
@@ -39,7 +40,17 @@ export async function POST(request: NextRequest): Promise<Response> {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const emit = (event: DeployEvent) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+      let closed = false;
+      const emit = (event: DeployEvent) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        } catch {
+          // The browser may navigate away while a long Azure command is running.
+          // Do not attempt another enqueue after the stream has been closed.
+          closed = true;
+        }
+      };
       let cleanup: () => Promise<void> = async () => undefined;
       let recordId: string | undefined;
       try {
@@ -62,7 +73,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         const target = { ...input, containerPort: prepared.containerPort };
         const vm = await resolveAzureVm(target);
         emit({ phase: "deploy", message: `Azure VM ${vm.name}이 Docker Hub에서 이미지를 받아 실행하는 중`, instanceId: vm.name });
-        const url = await deployAzureVm(target, vm, prepared.image);
+        const appEnv = input.source === "github" ? await getAppEnv(requireInstallationId(request), input.repository) : undefined;
+        const url = await deployAzureVm(target, vm, prepared.image, appEnv);
         if (recordId) await completeDeployment(recordId, { url, destination: vm.name });
         emit({ phase: "complete", message: "Azure 배포가 완료되었습니다.", instanceId: vm.name, url });
       } catch (error) {
@@ -70,8 +82,15 @@ export async function POST(request: NextRequest): Promise<Response> {
         emit({ phase: "error", message: publicCloudError(error) });
       } finally {
         await cleanup();
-        controller.close();
+        if (!closed) {
+          closed = true;
+          controller.close();
+        }
       }
+    },
+    cancel() {
+      // The client disconnected; the deployment may continue remotely, but the
+      // server must stop writing to this stream.
     },
   });
   return new Response(stream, { headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store" } });
